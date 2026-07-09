@@ -1,0 +1,17 @@
+{
+  "name": "NetForge",
+  "short_name": "NetForge",
+  "description": "Générateur de configurations réseau et infra pour SISR",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0A0D12",
+  "theme_color": "#0A0D12",
+  "icons": [
+    {
+      "src": "assets/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

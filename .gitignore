@@ -1,0 +1,13 @@
+# Système
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+
+# Éventuels environnements locaux
+.env
+node_modules/
