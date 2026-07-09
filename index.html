@@ -338,6 +338,40 @@
           </div>
         </div>
 
+        <div class="builder-label" style="margin-top:20px;">Groupes d'objets Cisco (réutilisables dans les règles)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Groupe réseau</label>
+            <input type="text" id="og-net-name" placeholder="ex: SRC_ADMIN">
+          </div>
+          <div class="mini-field grow">
+            <label>Membre (IP ou réseau/CIDR)</label>
+            <input type="text" id="og-net-member" placeholder="192.168.10.0/24 ou 192.168.10.5">
+          </div>
+          <button class="btn-add" id="og-net-add-btn">+ Ajouter au groupe</button>
+        </div>
+        <div class="port-rows" id="og-net-rows" style="margin-top:10px;"></div>
+
+        <div class="builder-row" style="margin-top:14px;">
+          <div class="mini-field">
+            <label>Groupe de services</label>
+            <input type="text" id="og-svc-name" placeholder="ex: SVC_WEB">
+          </div>
+          <div class="mini-field">
+            <label>Protocole</label>
+            <select id="og-svc-proto">
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>Port</label>
+            <input type="text" id="og-svc-port" placeholder="80">
+          </div>
+          <button class="btn-add" id="og-svc-add-btn">+ Ajouter au groupe</button>
+        </div>
+        <div class="port-rows" id="og-svc-rows" style="margin-top:10px;"></div>
+
         <div class="builder-label" style="margin-top:20px;">Presets rapides</div>
         <div class="chips">
           <button class="btn-add" id="fw-preset-web">Serveur Web (80/443/22)</button>
@@ -382,6 +416,21 @@
             </label>
           </div>
           <button class="btn-add" id="fw-add-rule-btn">+ Ajouter</button>
+        </div>
+
+        <div class="builder-row" style="margin-top:8px;">
+          <div class="mini-field grow">
+            <label>Ou groupe réseau (source) — remplace la source ci-dessus</label>
+            <select id="fw-rule-src-group"><option value="">— aucun —</option></select>
+          </div>
+          <div class="mini-field grow">
+            <label>Ou groupe réseau (destination) — remplace la dest. ci-dessus</label>
+            <select id="fw-rule-dst-group"><option value="">— aucun —</option></select>
+          </div>
+          <div class="mini-field grow">
+            <label>Ou groupe de services — remplace protocole/port ci-dessus</label>
+            <select id="fw-rule-svc-group"><option value="">— aucun —</option></select>
+          </div>
         </div>
 
         <div class="chips" style="margin-top:10px;">

@@ -22,6 +22,8 @@ function saveState() {
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
       fwPolicy: (typeof document !== 'undefined' && document.getElementById('fw-policy')) ? document.getElementById('fw-policy').value : 'DROP',
       dnsRecords: typeof dnsRecords !== 'undefined' ? dnsRecords : [],
+      networkGroups: typeof networkGroups !== 'undefined' ? networkGroups : [],
+      serviceGroups: typeof serviceGroups !== 'undefined' ? serviceGroups : [],
       dnsZoneName: (typeof document !== 'undefined' && document.getElementById('dns-zone-name')) ? document.getElementById('dns-zone-name').value : '',
       dnsPrimaryNs: (typeof document !== 'undefined' && document.getElementById('dns-primary-ns')) ? document.getElementById('dns-primary-ns').value : '',
       dnsAdminEmail: (typeof document !== 'undefined' && document.getElementById('dns-admin-email')) ? document.getElementById('dns-admin-email').value : ''
@@ -421,6 +423,8 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawe
 let vlanState = [];  // { id, name, svi }
 let fwRules = []; // { action, proto, port, source, dest } — module Firewall
 let dnsRecords = []; // { type, name, value, priority } — module DNS
+let networkGroups = []; // { name, members: [] } — object-groups Cisco (Firewall)
+let serviceGroups = []; // { name, members: [{proto, port}] } — object-groups Cisco (Firewall)
 let portState = [];  // { port, mode, vlanId, voiceVlanId, nativeVlanId, description, security }
 
 const vlanChips = document.getElementById('vlan-chips');
@@ -2048,6 +2052,8 @@ if (savedState && savedState.fwPolicy) {
   if (fwPolicySelect) fwPolicySelect.value = savedState.fwPolicy;
 }
 if (savedState && savedState.dnsRecords) dnsRecords = savedState.dnsRecords;
+if (savedState && savedState.networkGroups) networkGroups = savedState.networkGroups;
+if (savedState && savedState.serviceGroups) serviceGroups = savedState.serviceGroups;
 if (savedState) {
   const zoneEl = document.getElementById('dns-zone-name');
   const nsEl = document.getElementById('dns-primary-ns');
@@ -2085,6 +2091,103 @@ document.querySelectorAll('[data-fill-port]').forEach(btn => {
   });
 });
 
+// ---- Object-groups Cisco (réseau + service) ----
+function renderOgSelects() {
+  const srcSelect = document.getElementById('fw-rule-src-group');
+  const dstSelect = document.getElementById('fw-rule-dst-group');
+  const svcSelect = document.getElementById('fw-rule-svc-group');
+
+  const netOptions = '<option value="">— aucun —</option>' + networkGroups.map(g => `<option value="${g.name}">${g.name} (${g.members.length})</option>`).join('');
+  srcSelect.innerHTML = netOptions;
+  dstSelect.innerHTML = netOptions;
+  svcSelect.innerHTML = '<option value="">— aucun —</option>' + serviceGroups.map(g => `<option value="${g.name}">${g.name} (${g.members.length})</option>`).join('');
+}
+
+function renderOgNetRows() {
+  const box = document.getElementById('og-net-rows');
+  if (networkGroups.length === 0) {
+    box.innerHTML = '<span class="empty-hint">Aucun groupe réseau pour l\'instant</span>';
+  } else {
+    box.innerHTML = networkGroups.map((g, gIdx) => `
+      <div class="port-row">
+        <span class="port-name">${g.name}</span>
+        <span class="port-detail">${g.members.join(', ') || '(vide)'}</span>
+        <button class="chip-remove" data-remove-og-net-group="${gIdx}" title="Retirer le groupe">&times;</button>
+      </div>
+    `).join('');
+  }
+  renderOgSelects();
+  saveState();
+}
+
+function renderOgSvcRows() {
+  const box = document.getElementById('og-svc-rows');
+  if (serviceGroups.length === 0) {
+    box.innerHTML = '<span class="empty-hint">Aucun groupe de services pour l\'instant</span>';
+  } else {
+    box.innerHTML = serviceGroups.map((g, gIdx) => `
+      <div class="port-row">
+        <span class="port-name">${g.name}</span>
+        <span class="port-detail">${g.members.map(m => `${m.proto} ${m.port}`).join(', ') || '(vide)'}</span>
+        <button class="chip-remove" data-remove-og-svc-group="${gIdx}" title="Retirer le groupe">&times;</button>
+      </div>
+    `).join('');
+  }
+  renderOgSelects();
+  saveState();
+}
+
+document.getElementById('og-net-add-btn').addEventListener('click', () => {
+  const name = document.getElementById('og-net-name').value.trim().toUpperCase();
+  const member = document.getElementById('og-net-member').value.trim();
+  if (!name || !member) return;
+
+  let group = networkGroups.find(g => g.name === name);
+  if (!group) {
+    group = { name, members: [] };
+    networkGroups.push(group);
+  }
+  if (!group.members.includes(member)) group.members.push(member);
+
+  document.getElementById('og-net-member').value = '';
+  renderOgNetRows();
+});
+
+document.getElementById('og-svc-add-btn').addEventListener('click', () => {
+  const name = document.getElementById('og-svc-name').value.trim().toUpperCase();
+  const proto = document.getElementById('og-svc-proto').value;
+  const port = document.getElementById('og-svc-port').value.trim();
+  if (!name || !port) return;
+
+  let group = serviceGroups.find(g => g.name === name);
+  if (!group) {
+    group = { name, members: [] };
+    serviceGroups.push(group);
+  }
+  if (!group.members.some(m => m.proto === proto && m.port === port)) {
+    group.members.push({ proto, port });
+  }
+
+  document.getElementById('og-svc-port').value = '';
+  renderOgSvcRows();
+});
+
+document.addEventListener('click', (e) => {
+  if (e.target.dataset.removeOgNetGroup !== undefined) {
+    networkGroups.splice(parseInt(e.target.dataset.removeOgNetGroup, 10), 1);
+    renderOgNetRows();
+  }
+  if (e.target.dataset.removeOgSvcGroup !== undefined) {
+    serviceGroups.splice(parseInt(e.target.dataset.removeOgSvcGroup, 10), 1);
+    renderOgSvcRows();
+  }
+});
+
+function formatFwEndpoint(value) {
+  if (value.startsWith('OG:')) return `groupe ${value.slice(3)}`;
+  return value;
+}
+
 function renderFwRuleRows() {
   if (fwRules.length === 0) {
     fwRuleRows.innerHTML = '<span class="empty-hint">Aucune règle ajoutée pour l\'instant</span>';
@@ -2092,12 +2195,13 @@ function renderFwRuleRows() {
     return;
   }
   fwRuleRows.innerHTML = fwRules.map((r, idx) => {
-    const portPart = r.port ? ` port ${r.port}` : '';
+    const isSvcGroup = r.port && r.port.startsWith('SVCOG:');
+    const protoPortPart = isSvcGroup ? ` groupe ${r.port.slice(6)}` : `${r.proto.toUpperCase()}${r.port ? ' port ' + r.port : ''}`;
     const logPart = r.log ? ` <span class="port-detail-extra">[log]</span>` : '';
     return `
       <div class="port-row">
         <span class="port-badge ${r.action === 'ACCEPT' ? 'access' : 'trunk'}">${r.action}</span>
-        <span class="port-detail">${r.proto.toUpperCase()}${portPart} — ${r.source} → ${r.dest}${logPart}</span>
+        <span class="port-detail">${protoPortPart} — ${formatFwEndpoint(r.source)} → ${formatFwEndpoint(r.dest)}${logPart}</span>
         <button class="chip-remove" data-fw-move-up="${idx}" title="Monter" ${idx === 0 ? 'style="opacity:0.3;pointer-events:none;"' : ''}>↑</button>
         <button class="chip-remove" data-fw-move-down="${idx}" title="Descendre" ${idx === fwRules.length - 1 ? 'style="opacity:0.3;pointer-events:none;"' : ''}>↓</button>
         <button class="chip-remove" data-remove-fw-rule="${idx}" title="Retirer">&times;</button>
@@ -2109,17 +2213,28 @@ function renderFwRuleRows() {
 
 document.getElementById('fw-add-rule-btn').addEventListener('click', () => {
   const action = document.getElementById('fw-rule-action').value;
-  const proto = fwRuleProto.value;
-  const port = (proto === 'icmp' || proto === 'any') ? '' : document.getElementById('fw-rule-port').value.trim();
-  const source = document.getElementById('fw-rule-source').value.trim() || 'any';
-  const dest = document.getElementById('fw-rule-dest').value.trim() || 'any';
+  let proto = fwRuleProto.value;
+  let port = (proto === 'icmp' || proto === 'any') ? '' : document.getElementById('fw-rule-port').value.trim();
+  let source = document.getElementById('fw-rule-source').value.trim() || 'any';
+  let dest = document.getElementById('fw-rule-dest').value.trim() || 'any';
   const log = document.getElementById('fw-rule-log').checked;
+
+  const srcGroup = document.getElementById('fw-rule-src-group').value;
+  const dstGroup = document.getElementById('fw-rule-dst-group').value;
+  const svcGroup = document.getElementById('fw-rule-svc-group').value;
+
+  if (srcGroup) source = `OG:${srcGroup}`;
+  if (dstGroup) dest = `OG:${dstGroup}`;
+  if (svcGroup) { proto = 'any'; port = `SVCOG:${svcGroup}`; }
 
   fwRules.push({ action, proto, port, source, dest, log });
   document.getElementById('fw-rule-port').value = '';
   document.getElementById('fw-rule-source').value = 'any';
   document.getElementById('fw-rule-dest').value = 'any';
   document.getElementById('fw-rule-log').checked = false;
+  document.getElementById('fw-rule-src-group').value = '';
+  document.getElementById('fw-rule-dst-group').value = '';
+  document.getElementById('fw-rule-svc-group').value = '';
   renderFwRuleRows();
 });
 
@@ -2164,6 +2279,22 @@ document.getElementById('fw-preset-ssh').addEventListener('click', () => {
 });
 
 // ---- Génération iptables ----
+function resolveNetworkGroupMembers(value) {
+  if (value && value.startsWith('OG:')) {
+    const group = networkGroups.find(g => g.name === value.slice(3));
+    return (group && group.members.length > 0) ? group.members : ['any'];
+  }
+  return [value];
+}
+
+function resolveServiceGroupMembers(rule) {
+  if (rule.port && rule.port.startsWith('SVCOG:')) {
+    const group = serviceGroups.find(g => g.name === rule.port.slice(6));
+    return (group && group.members.length > 0) ? group.members : [{ proto: 'ip', port: '' }];
+  }
+  return [{ proto: rule.proto, port: rule.port }];
+}
+
 function generateIptablesConfig(policy, rules) {
   const validPolicies = ['ACCEPT', 'DROP', 'REJECT'];
   policy = policy.trim().toUpperCase();
@@ -2186,16 +2317,28 @@ function generateIptablesConfig(policy, rules) {
   lines.push('');
 
   rules.forEach((r, idx) => {
-    let base = `-p ${r.proto}`;
-    if (r.port) base += ` --dport ${r.port}`;
-    if (r.source && r.source.toLowerCase() !== 'any') base += ` -s ${r.source}`;
-    if (r.dest && r.dest.toLowerCase() !== 'any') base += ` -d ${r.dest}`;
+    const usesGroup = r.source.startsWith('OG:') || r.dest.startsWith('OG:') || (r.port && r.port.startsWith('SVCOG:'));
+    lines.push(`# Règle ${idx + 1}${usesGroup ? ' (groupe(s) développé(s) individuellement — iptables n\'a pas d\'object-group natif)' : ''}`);
 
-    lines.push(`# Règle ${idx + 1}`);
-    if (r.log) {
-      lines.push(`iptables -A INPUT ${base} -j LOG --log-prefix "NETFORGE-R${idx + 1}: "`);
-    }
-    lines.push(`iptables -A INPUT ${base} -j ${r.action}`);
+    const sources = resolveNetworkGroupMembers(r.source);
+    const dests = resolveNetworkGroupMembers(r.dest);
+    const svcs = resolveServiceGroupMembers(r);
+
+    sources.forEach(source => {
+      dests.forEach(dest => {
+        svcs.forEach(svc => {
+          let base = `-p ${svc.proto}`;
+          if (svc.port) base += ` --dport ${svc.port}`;
+          if (source && source.toLowerCase() !== 'any') base += ` -s ${source}`;
+          if (dest && dest.toLowerCase() !== 'any') base += ` -d ${dest}`;
+
+          if (r.log) {
+            lines.push(`iptables -A INPUT ${base} -j LOG --log-prefix "NETFORGE-R${idx + 1}: "`);
+          }
+          lines.push(`iptables -A INPUT ${base} -j ${r.action}`);
+        });
+      });
+    });
   });
 
   lines.push('');
@@ -2206,6 +2349,7 @@ function generateIptablesConfig(policy, rules) {
 // ---- Génération ACL Cisco ----
 function ciscoAddrFormat(value) {
   if (!value || value.toLowerCase() === 'any') return 'any';
+  if (value.startsWith('OG:')) return `object-group ${value.slice(3)}`;
   if (value.includes('/')) {
     const [ip, cidrStr] = value.split('/');
     const cidr = parseInt(cidrStr, 10);
@@ -2222,15 +2366,51 @@ function generateCiscoAclConfig(policy, rules) {
 
   const lines = [];
   lines.push('! === ACL Cisco générée par NetForge ===');
+
+  if (networkGroups.length > 0) {
+    lines.push('! --- Object-groups réseau ---');
+    networkGroups.forEach(g => {
+      lines.push(`object-group network ${g.name}`);
+      g.members.forEach(m => {
+        if (m.includes('/')) {
+          const [ip, cidrStr] = m.split('/');
+          const maskInt = maskFromCidr(parseInt(cidrStr, 10));
+          const networkInt = (ipToInt(ip) & maskInt) >>> 0;
+          lines.push(` network-object ${intToIp(networkInt)} ${intToIp(maskInt)}`);
+        } else {
+          lines.push(` network-object host ${m}`);
+        }
+      });
+    });
+    lines.push('!');
+  }
+
+  if (serviceGroups.length > 0) {
+    lines.push('! --- Object-groups service ---');
+    serviceGroups.forEach(g => {
+      lines.push(`object-group service ${g.name}`);
+      g.members.forEach(m => lines.push(` ${m.proto} eq ${m.port}`));
+    });
+    lines.push('!');
+  }
+
   lines.push('ip access-list extended NETFORGE_ACL');
 
-  rules.forEach((r, idx) => {
+  rules.forEach((r) => {
     const action = r.action === 'ACCEPT' ? 'permit' : 'deny';
-    const proto = r.proto === 'any' ? 'ip' : r.proto;
     const src = ciscoAddrFormat(r.source);
     const dst = ciscoAddrFormat(r.dest);
-    const ports = r.port ? r.port.split(',').map(p => p.trim()) : [null];
 
+    if (r.port && r.port.startsWith('SVCOG:')) {
+      const svcName = r.port.slice(6);
+      let line = ` ${action} object-group ${svcName} ${src} ${dst}`;
+      if (r.log) line += ' log';
+      lines.push(line);
+      return;
+    }
+
+    const proto = r.proto === 'any' ? 'ip' : r.proto;
+    const ports = r.port ? r.port.split(',').map(p => p.trim()) : [null];
     ports.forEach(port => {
       let line = ` ${action} ${proto} ${src} ${dst}`;
       if (port) line += ` eq ${port}`;
@@ -2292,6 +2472,11 @@ document.getElementById('fw-format').addEventListener('change', saveState);
 // ---- Testeur de règles ----
 function ipInCidrOrHost(testIp, ruleValue) {
   if (!ruleValue || ruleValue.toLowerCase() === 'any') return true;
+  if (ruleValue.startsWith('OG:')) {
+    const group = networkGroups.find(g => g.name === ruleValue.slice(3));
+    if (!group) return false;
+    return group.members.some(m => ipInCidrOrHost(testIp, m));
+  }
   const testInt = ipToInt(testIp);
   if (testInt === null) return false;
   if (ruleValue.includes('/')) {
@@ -2302,9 +2487,14 @@ function ipInCidrOrHost(testIp, ruleValue) {
   return testInt === ipToInt(ruleValue);
 }
 
-function portMatches(testPort, rulePort) {
-  if (!rulePort) return true;
-  const list = rulePort.split(',').map(p => p.trim());
+function portMatches(testProto, testPort, rule) {
+  if (rule.port && rule.port.startsWith('SVCOG:')) {
+    const group = serviceGroups.find(g => g.name === rule.port.slice(6));
+    if (!group) return false;
+    return group.members.some(m => m.proto === testProto && String(m.port) === String(testPort));
+  }
+  if (!rule.port) return true;
+  const list = rule.port.split(',').map(p => p.trim());
   return list.includes(String(testPort));
 }
 
@@ -2325,7 +2515,7 @@ document.getElementById('fw-test-btn').addEventListener('click', () => {
   for (let i = 0; i < fwRules.length; i++) {
     const r = fwRules[i];
     if (r.proto !== 'any' && r.proto !== proto) continue;
-    if (proto !== 'icmp' && !portMatches(port, r.port)) continue;
+    if (proto !== 'icmp' && !portMatches(proto, port, r)) continue;
     if (!ipInCidrOrHost(source, r.source)) continue;
     if (!ipInCidrOrHost(dest, r.dest)) continue;
     matchIdx = i;
@@ -2343,6 +2533,8 @@ document.getElementById('fw-test-btn').addEventListener('click', () => {
   }
 });
 
+renderOgNetRows();
+renderOgSvcRows();
 renderFwRuleRows();
 
 // ==================================================================
