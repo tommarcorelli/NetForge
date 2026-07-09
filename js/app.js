@@ -17,6 +17,7 @@ function saveState() {
       deviceOspf: typeof deviceOspf !== 'undefined' ? deviceOspf : {},
       deviceNat: typeof deviceNat !== 'undefined' ? deviceNat : {},
       deviceEtherchannels: typeof deviceEtherchannels !== 'undefined' ? deviceEtherchannels : {},
+      deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
@@ -731,6 +732,7 @@ const deviceRoutes = {};      // deviceId -> [{network, cidr, nextHop}]
 const deviceOspf = {};         // deviceId -> {enabled, pid, area}
 const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, staticMappings}
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
+const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -1022,6 +1024,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceOspf[id] = { enabled: false, pid: '1', area: '0' };
   deviceNat[id] = { patEnabled: false, outsideIface: '', staticMappings: [] };
   deviceEtherchannels[id] = [];
+  deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1048,6 +1051,7 @@ document.addEventListener('click', (e) => {
     delete deviceOspf[id];
     delete deviceNat[id];
     delete deviceEtherchannels[id];
+    delete deviceVtp[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -1073,6 +1077,37 @@ function renderDeviceConfigPanel() {
     deviceConfigPanel.innerHTML = `
       <div class="device-config">
         <div class="device-config-title">Configuration — ${device.name} (switch)</div>
+
+        <div class="subsection-label">VTP (VLAN Trunking Protocol)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Mode</label>
+            <select id="dev-vtp-mode">
+              <option value="off">Désactivé</option>
+              <option value="server">Server</option>
+              <option value="client">Client</option>
+              <option value="transparent">Transparent</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>Domaine</label>
+            <input type="text" id="dev-vtp-domain" placeholder="SISR-DOMAIN">
+          </div>
+          <div class="mini-field">
+            <label>Version</label>
+            <select id="dev-vtp-version">
+              <option value="2">v2</option>
+              <option value="1">v1</option>
+              <option value="3">v3</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>Mot de passe (optionnel)</label>
+            <input type="text" id="dev-vtp-password" placeholder="">
+          </div>
+          <button class="btn-add" id="dev-vtp-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint" id="dev-vtp-hint"></div>
 
         <div class="builder-row">
           <div class="mini-field">
@@ -1139,6 +1174,25 @@ function renderDeviceConfigPanel() {
         <div class="port-rows" id="dev-ec-rows"></div>
       </div>
     `;
+
+    // ---- VTP ----
+    const vtp = deviceVtp[selectedDeviceId] || { mode: 'off', domain: '', version: '2', password: '' };
+    document.getElementById('dev-vtp-mode').value = vtp.mode;
+    document.getElementById('dev-vtp-domain').value = vtp.domain;
+    document.getElementById('dev-vtp-version').value = vtp.version;
+    document.getElementById('dev-vtp-password').value = vtp.password;
+    document.getElementById('dev-vtp-hint').textContent = vtp.mode !== 'off' && !vtp.domain
+      ? 'Un domaine VTP est requis pour que le mode prenne effet.' : '';
+
+    document.getElementById('dev-vtp-save-btn').addEventListener('click', () => {
+      deviceVtp[selectedDeviceId] = {
+        mode: document.getElementById('dev-vtp-mode').value,
+        domain: document.getElementById('dev-vtp-domain').value.trim(),
+        version: document.getElementById('dev-vtp-version').value,
+        password: document.getElementById('dev-vtp-password').value.trim()
+      };
+      renderDeviceConfigPanel();
+    });
 
     const devPortVlan = document.getElementById('dev-port-vlan');
     devPortVlan.innerHTML = topoVlanState.length === 0
@@ -1691,7 +1745,22 @@ function generateSwitchDeviceConfig(device) {
   const lines = [];
   lines.push(`! === ${device.name} (switch) — généré par NetForge ===`);
   lines.push('!');
+
+  const vtp = deviceVtp[device.id];
+  if (vtp && vtp.mode !== 'off' && vtp.domain) {
+    lines.push('! --- VTP ---');
+    lines.push(`vtp domain ${vtp.domain}`);
+    lines.push(`vtp mode ${vtp.mode}`);
+    lines.push(`vtp version ${vtp.version}`);
+    if (vtp.password) lines.push(`vtp password ${vtp.password}`);
+    lines.push('!');
+  }
+
   if (topoVlanState.length > 0) {
+    if (vtp && vtp.mode === 'client') {
+      lines.push('! Mode VTP client : les VLANs sont reçus du serveur VTP, pas besoin de les déclarer ici.');
+      lines.push('! (déclarations ci-dessous ignorées par le switch en pratique, gardées pour référence)');
+    }
     lines.push('! --- Déclaration des VLANs ---');
     topoVlanState.forEach(v => {
       lines.push(`vlan ${v.id}`);
@@ -2043,6 +2112,7 @@ if (savedState) {
   if (savedState.deviceOspf) Object.assign(deviceOspf, savedState.deviceOspf);
   if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
   if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
+  if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
   if (savedState.links) links = savedState.links;
   if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
 }
