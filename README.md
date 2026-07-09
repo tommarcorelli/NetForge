@@ -50,6 +50,11 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — Guide intégré + préparation GitHub
+- **Nouvel onglet "Guide"** dans l'app : explique ce que fait chaque module et son lien avec le programme BTS SISR — utile en révision ou pour présenter le projet en jury
+- **Dépôt Git initialisé en local** (branche `main`, premier commit fait) avec `.gitignore` (fichiers système/éditeurs) et `LICENSE` (MIT)
+- Pour pousser sur GitHub : créer un dépôt vide sur github.com, puis `git remote add origin <url>` et `git push -u origin main`
+
 ### 2026-07-06 — QA complète sur tous les modules
 - **Bug corrigé** : validation d'IP par `if (!ipToInt(x))` dans les routes statiques et le NAT statique rejetait à tort l'adresse `0.0.0.0` (piège JS classique : `0` est falsy) — remplacé par une comparaison explicite à `null`
 - Vérification systématique : syntaxe JS et balises HTML équilibrées, aucun ID dupliqué ni référence DOM cassée, cas limites VLSM (1 hôte, 0 hôte, texte invalide, base trop petite), générateurs de config robustes sur équipement vide, aucune contamination entre les VLANs des modules VLAN et Topologie, cohérence du service worker avec les fichiers réels
