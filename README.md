@@ -50,6 +50,13 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — Object-groups Cisco (Firewall)
+- **Groupes réseau** et **groupes de services** réutilisables : au lieu de retaper les mêmes IP/ports dans chaque règle, on les définit une fois dans un groupe nommé
+- Une règle peut utiliser un groupe à la place d'une source, d'une destination, ou du protocole/port (menus déroulants dédiés dans le formulaire d'ajout)
+- **Export ACL Cisco** : génère la syntaxe native `object-group network`/`object-group service` puis référence les groupes directement dans l'ACL (`permit object-group SVC_WEB object-group SRC_ADMIN any`)
+- **Export iptables** : les groupes sont automatiquement développés en règles concrètes (produit cartésien réseaux × services), puisque iptables n'a pas de concept d'object-group natif
+- **Testeur de règles** mis à jour pour reconnaître les groupes lors de la simulation
+
 ### 2026-07-06 — Guide intégré + préparation GitHub
 - **Nouvel onglet "Guide"** dans l'app : explique ce que fait chaque module et son lien avec le programme BTS SISR — utile en révision ou pour présenter le projet en jury
 - **Dépôt Git initialisé en local** (branche `main`, premier commit fait) avec `.gitignore` (fichiers système/éditeurs) et `LICENSE` (MIT)
