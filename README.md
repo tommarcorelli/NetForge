@@ -50,6 +50,11 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — VPN Site-à-Site IPsec
+- Section **VPN Site-à-Site (IPsec)** dans le panneau routeur : IP du pair distant, clé pré-partagée, réseaux local/distant à protéger, interface sortante, chiffrement (AES-256/128/3DES), hachage (SHA/MD5), groupe Diffie-Hellman (2/5/14)
+- Génère la chaîne complète Cisco IOS classique : `crypto isakmp policy` (Phase 1), `crypto isakmp key`, `crypto ipsec transform-set` (Phase 2), ACL de trafic intéressant avec wildcard mask calculé automatiquement, `crypto map`, application sur l'interface WAN
+- Rappel affiché : le routeur distant doit être configuré avec les réseaux local/distant inversés et la même clé
+
 ### 2026-07-06 — STP avancé
 - Section **STP** dans le panneau switch : mode (Rapid-PVST+/PVST+/MST), priorité (pour influencer l'élection du root bridge), BPDU Guard sur les ports accès, Root Guard sur les ports trunk
 - Priorité basse (4096, 8192...) appliquée à tous les VLANs déclarés — pratique pour désigner explicitement le root bridge d'un TP
