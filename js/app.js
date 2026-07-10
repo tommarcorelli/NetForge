@@ -1,8 +1,253 @@
 // ---- Navigation entre modules ----
 // ==================================================================
-// Persistance locale (localStorage) — sauvegarde automatique
+// Persistance locale (localStorage) — projets nommés multiples
 // ==================================================================
-const STORAGE_KEY = 'netforge-state-v1';
+const PROJECTS_KEY = 'netforge-projects-v1';
+const LEGACY_STORAGE_KEY = 'netforge-state-v1'; // ancienne sauvegarde unique (avant les projets), utilisée uniquement pour la migration
+
+function makeProjectId() {
+  return 'p_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function saveProjectsData(data) {
+  try {
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('NetForge : sauvegarde des projets impossible', e);
+  }
+}
+
+function loadProjectsData() {
+  try {
+    const raw = localStorage.getItem(PROJECTS_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && data.projects && data.activeProjectId && data.projects[data.activeProjectId]) return data;
+    }
+  } catch (e) {
+    console.warn('NetForge : lecture des projets impossible', e);
+  }
+
+  // Pas encore de projets multiples chez cet utilisateur : migration depuis l'ancienne sauvegarde unique (si elle existe)
+  let legacyState = null;
+  try {
+    const oldRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (oldRaw) legacyState = JSON.parse(oldRaw);
+  } catch (e) { /* ignore, on repart d'un projet vide */ }
+
+  const id = makeProjectId();
+  const data = {
+    projects: {
+      [id]: {
+        name: 'Projet 1',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        state: legacyState || {}
+      }
+    },
+    activeProjectId: id
+  };
+  saveProjectsData(data);
+  return data;
+}
+
+let projectsData = loadProjectsData();
+
+function getActiveProject() {
+  return projectsData.projects[projectsData.activeProjectId];
+}
+
+// ==================================================================
+// Intégrité des données — sanitisation défensive au chargement
+// ==================================================================
+const CURRENT_SCHEMA_VERSION = 1; // à incrémenter quand la forme des données change (ex. arrivée de l'IPv6) ; sert de point d'ancrage pour de futures migrations
+
+const STATE_SHAPE = {
+  vlanState: 'array', portState: 'array', topoVlanState: 'array',
+  devices: 'array', links: 'array', fwRules: 'array', dnsRecords: 'array',
+  networkGroups: 'array', serviceGroups: 'array',
+  devicePorts: 'object', deviceInterfaces: 'object', deviceRoutes: 'object',
+  deviceOspf: 'object', deviceNat: 'object', deviceEtherchannels: 'object',
+  deviceVtp: 'object', deviceWifi: 'object', deviceStp: 'object',
+  deviceVpn: 'object', deviceSecurity: 'object',
+  deviceIdSeq: 'number',
+  fwPolicy: 'string', dnsZoneName: 'string', dnsPrimaryNs: 'string', dnsAdminEmail: 'string'
+};
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Vérifie chaque champ attendu du projet chargé ; si un champ existe mais avec un type incohérent
+// (fichier corrompu, édition manuelle ratée...), il est remplacé par une valeur par défaut sûre
+// au lieu de faire planter le reste de l'appli. Ne touche pas aux champs absents (comportement
+// inchangé : le module garde alors sa valeur initiale déjà en mémoire).
+function sanitizeState(raw) {
+  if (!isPlainObject(raw)) {
+    return { state: {}, repairedFields: raw ? ['(état complet)'] : [] };
+  }
+  const clean = {};
+  const repairedFields = [];
+  for (const [key, expected] of Object.entries(STATE_SHAPE)) {
+    const value = raw[key];
+    if (value === undefined) continue;
+    let ok;
+    if (expected === 'array') ok = Array.isArray(value);
+    else if (expected === 'object') ok = isPlainObject(value);
+    else if (expected === 'number') ok = typeof value === 'number' && !Number.isNaN(value);
+    else ok = typeof value === 'string';
+
+    if (ok) {
+      clean[key] = value;
+    } else {
+      repairedFields.push(key);
+      clean[key] = expected === 'array' ? [] : expected === 'object' ? {} : expected === 'number' ? 1 : '';
+    }
+  }
+  return { state: clean, repairedFields };
+}
+
+function showIntegrityNotice(repairedFields) {
+  if (!repairedFields.length) return;
+  const bar = document.createElement('div');
+  bar.className = 'integrity-notice';
+  bar.textContent = `⚠ Projet restauré partiellement — champ(s) réinitialisé(s) : ${repairedFields.join(', ')}`;
+  document.body.appendChild(bar);
+  setTimeout(() => bar.remove(), 8000);
+}
+
+// ==================================================================
+// Historique annuler / rétablir (Ctrl+Z / Ctrl+Y) — tous les modules
+// ==================================================================
+const UNDO_LIMIT = 50;
+let undoStack = [];
+let redoStack = [];
+let isRestoringState = false; // empêche l'historique de s'auto-alimenter pendant une restauration
+
+function pushUndoSnapshot(prevState) {
+  if (isRestoringState) return;
+  if (!prevState || Object.keys(prevState).length === 0) return;
+  const json = JSON.stringify(prevState);
+  if (undoStack.length && undoStack[undoStack.length - 1] === json) return; // pas de doublon consécutif
+  undoStack.push(json);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  redoStack = []; // toute nouvelle action invalide le futur "rétablir"
+  updateUndoRedoButtons();
+}
+
+function replaceDict(target, source) {
+  Object.keys(target).forEach(k => delete target[k]);
+  Object.assign(target, source || {});
+}
+
+// Réapplique intégralement un instantané passé (undo) ou futur (redo) : réinitialise toutes les
+// variables d'état des modules puis relance le rendu de chaque module concerné.
+function applyStateSnapshot(json) {
+  let sanitized;
+  try {
+    const parsed = JSON.parse(json);
+    sanitized = sanitizeState(parsed).state;
+  } catch (e) {
+    console.warn("NetForge : instantané d'historique illisible", e);
+    return;
+  }
+
+  vlanState = sanitized.vlanState || [];
+  portState = sanitized.portState || [];
+  topoVlanState = sanitized.topoVlanState || [];
+  devices = sanitized.devices || [];
+  replaceDict(devicePorts, sanitized.devicePorts);
+  replaceDict(deviceInterfaces, sanitized.deviceInterfaces);
+  replaceDict(deviceRoutes, sanitized.deviceRoutes);
+  replaceDict(deviceOspf, sanitized.deviceOspf);
+  replaceDict(deviceNat, sanitized.deviceNat);
+  replaceDict(deviceEtherchannels, sanitized.deviceEtherchannels);
+  replaceDict(deviceVtp, sanitized.deviceVtp);
+  replaceDict(deviceWifi, sanitized.deviceWifi);
+  replaceDict(deviceStp, sanitized.deviceStp);
+  replaceDict(deviceVpn, sanitized.deviceVpn);
+  replaceDict(deviceSecurity, sanitized.deviceSecurity);
+  links = sanitized.links || [];
+  deviceIdSeq = sanitized.deviceIdSeq || 1;
+  fwRules = sanitized.fwRules || [];
+  networkGroups = sanitized.networkGroups || [];
+  serviceGroups = sanitized.serviceGroups || [];
+  dnsRecords = sanitized.dnsRecords || [];
+
+  const fwPolicySelect = document.getElementById('fw-policy');
+  if (fwPolicySelect) fwPolicySelect.value = sanitized.fwPolicy || 'DROP';
+  const zoneEl = document.getElementById('dns-zone-name');
+  const nsEl = document.getElementById('dns-primary-ns');
+  const emailEl = document.getElementById('dns-admin-email');
+  if (zoneEl) zoneEl.value = sanitized.dnsZoneName || '';
+  if (nsEl) nsEl.value = sanitized.dnsPrimaryNs || '';
+  if (emailEl) emailEl.value = sanitized.dnsAdminEmail || '';
+
+  if (selectedDeviceId && !devices.find(d => d.id === selectedDeviceId)) {
+    selectedDeviceId = null;
+  }
+
+  isRestoringState = true;
+  renderVlanChips();
+  renderPortRows();
+  renderDeviceList();
+  renderLinkRows();
+  renderTopologyDiagram();
+  renderTopologyStats();
+  renderTopoVlanChips();
+  renderDeviceConfigPanel();
+  renderOgNetRows();
+  renderOgSvcRows();
+  renderFwRuleRows();
+  renderDnsRecRows();
+  saveState(); // fige la restauration comme état courant du projet, sans repousser d'entrée d'historique (garde ci-dessus)
+  isRestoringState = false;
+  updateUndoRedoButtons();
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  const active = getActiveProject();
+  redoStack.push(JSON.stringify((active && active.state) || {}));
+  if (redoStack.length > UNDO_LIMIT) redoStack.shift();
+  applyStateSnapshot(undoStack.pop());
+}
+
+function redo() {
+  if (!redoStack.length) return;
+  const active = getActiveProject();
+  undoStack.push(JSON.stringify((active && active.state) || {}));
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  applyStateSnapshot(redoStack.pop());
+}
+
+function updateUndoRedoButtons() {
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+  if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+}
+
+document.addEventListener('keydown', (e) => {
+  const ctrlOrCmd = e.ctrlKey || e.metaKey;
+  if (!ctrlOrCmd) return;
+  const tag = (e.target && e.target.tagName) || '';
+  const typingContext = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  const key = e.key.toLowerCase();
+  if (key === 'z' && !e.shiftKey) {
+    if (typingContext) return; // laisse le champ gérer son propre undo texte natif
+    e.preventDefault();
+    undo();
+  } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+    if (typingContext) return;
+    e.preventDefault();
+    redo();
+  }
+});
 
 function saveState() {
   try {
@@ -33,26 +278,105 @@ function saveState() {
       dnsPrimaryNs: (typeof document !== 'undefined' && document.getElementById('dns-primary-ns')) ? document.getElementById('dns-primary-ns').value : '',
       dnsAdminEmail: (typeof document !== 'undefined' && document.getElementById('dns-admin-email')) ? document.getElementById('dns-admin-email').value : ''
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    state.schemaVersion = CURRENT_SCHEMA_VERSION;
+    const active = getActiveProject();
+    if (active) {
+      pushUndoSnapshot(active.state);
+      active.state = state;
+      active.updatedAt = Date.now();
+      saveProjectsData(projectsData);
+    }
   } catch (e) {
     console.warn('NetForge : sauvegarde locale impossible', e);
   }
 }
 
 function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch (e) {
-    console.warn('NetForge : lecture de la sauvegarde locale impossible', e);
-    return null;
-  }
+  const active = getActiveProject();
+  return (active && active.state && Object.keys(active.state).length) ? active.state : null;
 }
 
 function clearSavedState() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+  const active = getActiveProject();
+  if (active) {
+    active.state = {};
+    saveProjectsData(projectsData);
+  }
 }
+
+// ==================================================================
+// Gestion des projets (sélecteur, nouveau, renommer, supprimer)
+// ==================================================================
+function renderProjectSelect() {
+  const select = document.getElementById('project-select');
+  if (!select) return;
+  const projects = projectsData.projects;
+  select.innerHTML = Object.keys(projects)
+    .sort((a, b) => (projects[a].createdAt || 0) - (projects[b].createdAt || 0))
+    .map(id => `<option value="${id}"${id === projectsData.activeProjectId ? ' selected' : ''}>${escapeHtml(projects[id].name)}</option>`)
+    .join('');
+}
+
+function switchToProject(id) {
+  if (!projectsData.projects[id] || id === projectsData.activeProjectId) return;
+  projectsData.activeProjectId = id;
+  saveProjectsData(projectsData);
+  location.reload();
+}
+
+function createNewProject() {
+  const name = prompt('Nom du nouveau projet :', 'Nouveau projet');
+  if (name === null) return;
+  const trimmed = name.trim() || 'Nouveau projet';
+  const id = makeProjectId();
+  projectsData.projects[id] = { name: trimmed, createdAt: Date.now(), updatedAt: Date.now(), state: {} };
+  projectsData.activeProjectId = id;
+  saveProjectsData(projectsData);
+  location.reload();
+}
+
+function renameActiveProject() {
+  const active = getActiveProject();
+  if (!active) return;
+  const name = prompt('Renommer le projet :', active.name);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  active.name = trimmed;
+  saveProjectsData(projectsData);
+  renderProjectSelect();
+}
+
+function deleteActiveProject() {
+  const ids = Object.keys(projectsData.projects);
+  if (ids.length <= 1) {
+    alert('Impossible de supprimer le dernier projet restant.');
+    return;
+  }
+  const active = getActiveProject();
+  if (!confirm(`Supprimer définitivement le projet "${active.name}" ? Cette action est irréversible.`)) return;
+  delete projectsData.projects[projectsData.activeProjectId];
+  const remainingIds = Object.keys(projectsData.projects).sort((a, b) => (projectsData.projects[a].createdAt || 0) - (projectsData.projects[b].createdAt || 0));
+  projectsData.activeProjectId = remainingIds[0];
+  saveProjectsData(projectsData);
+  location.reload();
+}
+
+renderProjectSelect();
+const projectSelectEl = document.getElementById('project-select');
+if (projectSelectEl) projectSelectEl.addEventListener('change', (e) => switchToProject(e.target.value));
+const projectNewBtn = document.getElementById('project-new-btn');
+if (projectNewBtn) projectNewBtn.addEventListener('click', createNewProject);
+const projectRenameBtn = document.getElementById('project-rename-btn');
+if (projectRenameBtn) projectRenameBtn.addEventListener('click', renameActiveProject);
+const projectDeleteBtn = document.getElementById('project-delete-btn');
+if (projectDeleteBtn) projectDeleteBtn.addEventListener('click', deleteActiveProject);
+
+const undoBtn = document.getElementById('undo-btn');
+if (undoBtn) undoBtn.addEventListener('click', undo);
+const redoBtn = document.getElementById('redo-btn');
+if (redoBtn) redoBtn.addEventListener('click', redo);
+updateUndoRedoButtons();
 
 
 const navItems = document.querySelectorAll('.nav-item');
@@ -2648,41 +2972,59 @@ document.addEventListener('click', (e) => {
   }
 });
 
-const savedState = loadState();
-if (savedState) {
-  if (savedState.vlanState) vlanState = savedState.vlanState;
-  if (savedState.portState) portState = savedState.portState;
-  if (savedState.topoVlanState) topoVlanState = savedState.topoVlanState;
-  if (savedState.devices) devices = savedState.devices;
-  if (savedState.devicePorts) Object.assign(devicePorts, savedState.devicePorts);
-  if (savedState.deviceInterfaces) Object.assign(deviceInterfaces, savedState.deviceInterfaces);
-  if (savedState.deviceRoutes) Object.assign(deviceRoutes, savedState.deviceRoutes);
-  if (savedState.deviceOspf) Object.assign(deviceOspf, savedState.deviceOspf);
-  if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
-  if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
-  if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
-  if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
-  if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
-  if (savedState.deviceVpn) Object.assign(deviceVpn, savedState.deviceVpn);
-  if (savedState.deviceSecurity) Object.assign(deviceSecurity, savedState.deviceSecurity);
-  if (savedState.links) links = savedState.links;
-  if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
+let savedState = null;
+try {
+  const rawSaved = loadState();
+  if (rawSaved) {
+    const { state: sanitized, repairedFields } = sanitizeState(rawSaved);
+    savedState = sanitized;
+    if (repairedFields.length) showIntegrityNotice(repairedFields);
+  }
+} catch (e) {
+  console.warn('NetForge : état du projet illisible, redémarrage à vide', e);
+  savedState = null;
+  showIntegrityNotice(['(état complet)']);
 }
-if (savedState && savedState.fwRules) fwRules = savedState.fwRules;
-if (savedState && savedState.fwPolicy) {
-  const fwPolicySelect = document.getElementById('fw-policy');
-  if (fwPolicySelect) fwPolicySelect.value = savedState.fwPolicy;
-}
-if (savedState && savedState.dnsRecords) dnsRecords = savedState.dnsRecords;
-if (savedState && savedState.networkGroups) networkGroups = savedState.networkGroups;
-if (savedState && savedState.serviceGroups) serviceGroups = savedState.serviceGroups;
-if (savedState) {
-  const zoneEl = document.getElementById('dns-zone-name');
-  const nsEl = document.getElementById('dns-primary-ns');
-  const emailEl = document.getElementById('dns-admin-email');
-  if (zoneEl && savedState.dnsZoneName) zoneEl.value = savedState.dnsZoneName;
-  if (nsEl && savedState.dnsPrimaryNs) nsEl.value = savedState.dnsPrimaryNs;
-  if (emailEl && savedState.dnsAdminEmail) emailEl.value = savedState.dnsAdminEmail;
+
+try {
+  if (savedState) {
+    if (savedState.vlanState) vlanState = savedState.vlanState;
+    if (savedState.portState) portState = savedState.portState;
+    if (savedState.topoVlanState) topoVlanState = savedState.topoVlanState;
+    if (savedState.devices) devices = savedState.devices;
+    if (savedState.devicePorts) Object.assign(devicePorts, savedState.devicePorts);
+    if (savedState.deviceInterfaces) Object.assign(deviceInterfaces, savedState.deviceInterfaces);
+    if (savedState.deviceRoutes) Object.assign(deviceRoutes, savedState.deviceRoutes);
+    if (savedState.deviceOspf) Object.assign(deviceOspf, savedState.deviceOspf);
+    if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
+    if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
+    if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
+    if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
+    if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
+    if (savedState.deviceVpn) Object.assign(deviceVpn, savedState.deviceVpn);
+    if (savedState.deviceSecurity) Object.assign(deviceSecurity, savedState.deviceSecurity);
+    if (savedState.links) links = savedState.links;
+    if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
+  }
+  if (savedState && savedState.fwRules) fwRules = savedState.fwRules;
+  if (savedState && savedState.fwPolicy) {
+    const fwPolicySelect = document.getElementById('fw-policy');
+    if (fwPolicySelect) fwPolicySelect.value = savedState.fwPolicy;
+  }
+  if (savedState && savedState.dnsRecords) dnsRecords = savedState.dnsRecords;
+  if (savedState && savedState.networkGroups) networkGroups = savedState.networkGroups;
+  if (savedState && savedState.serviceGroups) serviceGroups = savedState.serviceGroups;
+  if (savedState) {
+    const zoneEl = document.getElementById('dns-zone-name');
+    const nsEl = document.getElementById('dns-primary-ns');
+    const emailEl = document.getElementById('dns-admin-email');
+    if (zoneEl && savedState.dnsZoneName) zoneEl.value = savedState.dnsZoneName;
+    if (nsEl && savedState.dnsPrimaryNs) nsEl.value = savedState.dnsPrimaryNs;
+    if (emailEl && savedState.dnsAdminEmail) emailEl.value = savedState.dnsAdminEmail;
+  }
+} catch (e) {
+  console.warn('NetForge : application partielle de l\'état du projet', e);
+  showIntegrityNotice(['(application de l\'état)']);
 }
 
 renderVlanChips();
@@ -3320,12 +3662,14 @@ renderDnsRecRows();
 // ==================================================================
 document.getElementById('export-project-btn').addEventListener('click', () => {
   saveState();
-  const raw = localStorage.getItem(STORAGE_KEY) || '{}';
+  const active = getActiveProject();
+  const raw = JSON.stringify((active && active.state) || {});
   const blob = new Blob([raw], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
+  const slug = (active ? active.name : 'projet').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'projet';
   const a = document.createElement('a');
   a.href = url;
-  a.download = `netforge-projet-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `netforge-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -3341,9 +3685,12 @@ document.getElementById('import-project-input').addEventListener('change', (e) =
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      JSON.parse(reader.result); // valide que c'est bien du JSON avant d'écraser
-      if (!confirm("Ça va remplacer toutes les données actuelles (VLANs, équipements, règles, DNS...) par celles du fichier importé. Continuer ?")) return;
-      localStorage.setItem(STORAGE_KEY, reader.result);
+      const parsed = JSON.parse(reader.result); // valide que c'est bien du JSON avant d'écraser
+      if (!confirm("Ça va remplacer toutes les données du projet actif (VLANs, équipements, règles, DNS...) par celles du fichier importé. Continuer ?")) return;
+      const active = getActiveProject();
+      active.state = parsed;
+      active.updatedAt = Date.now();
+      saveProjectsData(projectsData);
       location.reload();
     } catch (err) {
       alert("Fichier invalide : ce n'est pas un export NetForge valide.");

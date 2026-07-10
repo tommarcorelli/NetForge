@@ -42,8 +42,19 @@
       </div>
     </nav>
 
+    <div class="sidebar-undo-row">
+      <button class="sidebar-btn-sm" id="undo-btn" title="Annuler (Ctrl+Z)" disabled>↶ Annuler</button>
+      <button class="sidebar-btn-sm" id="redo-btn" title="Rétablir (Ctrl+Y)" disabled>↷ Rétablir</button>
+    </div>
+
     <div class="sidebar-project">
       <div class="sidebar-project-label">Projet</div>
+      <select id="project-select" class="sidebar-select"></select>
+      <div class="sidebar-project-actions">
+        <button class="sidebar-btn-sm" id="project-new-btn" title="Nouveau projet">+ Nouveau</button>
+        <button class="sidebar-btn-sm" id="project-rename-btn" title="Renommer le projet">✎</button>
+        <button class="sidebar-btn-sm" id="project-delete-btn" title="Supprimer le projet">🗑</button>
+      </div>
       <button class="sidebar-btn" id="export-project-btn">⬇ Exporter (.json)</button>
       <button class="sidebar-btn" id="import-project-btn">⬆ Importer</button>
       <input type="file" id="import-project-input" accept=".json" style="display:none;">

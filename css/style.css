@@ -141,6 +141,74 @@ body {
   color: var(--cyan);
 }
 
+.sidebar-select {
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+}
+.sidebar-select:hover,
+.sidebar-select:focus {
+  border-color: var(--cyan);
+  outline: none;
+}
+
+.sidebar-project-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-btn-sm {
+  flex: 1;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.sidebar-btn-sm:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.sidebar-btn-sm:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+
+.sidebar-undo-row {
+  display: flex;
+  gap: 6px;
+}
+
+/* ---- Notice d'intégrité (toast) ---- */
+.integrity-notice {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-alt);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 10px 16px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  z-index: 999;
+  max-width: 80vw;
+}
+
 /* ---- Guide ---- */
 .guide-panel h2 {
   font-family: var(--font-display);

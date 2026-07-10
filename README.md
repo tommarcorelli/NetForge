@@ -50,6 +50,27 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-10 — Annuler / Rétablir (Ctrl+Z / Ctrl+Y) sur tous les modules
+- **Historique global** : chaque action qui modifie l'état (ajout/suppression de VLAN, équipement, règle, enregistrement DNS, config d'équipement...) devient annulable, jusqu'à **50 étapes en arrière**
+- **Raccourcis clavier** : `Ctrl+Z` pour annuler, `Ctrl+Y` (ou `Ctrl+Maj+Z`) pour rétablir — désactivés automatiquement si le focus est dans un champ de texte, pour ne pas interférer avec l'undo natif du navigateur dans les formulaires
+- **Boutons ↶ Annuler / ↷ Rétablir** dans la sidebar, grisés quand l'historique est vide dans un sens ou l'autre
+- Fonctionne en restaurant un instantané complet de l'état (tous modules), puis en relançant le rendu de chaque module concerné — pas de rechargement de page nécessaire
+- Toute nouvelle action après un "annuler" efface le futur "rétablir" (comportement standard, cohérent avec un traitement de texte)
+- L'historique est propre à la session en cours : changer de projet (ou recharger la page) repart sur un historique vide
+
+### 2026-07-10 — Intégrité des données au chargement (migration douce)
+- **Sanitisation défensive** de l'état d'un projet au chargement : chaque champ attendu (tableaux, objets, nombre, chaînes) est vérifié ; si un champ existe mais avec un type incohérent (fichier corrompu, édition manuelle ratée...), il est réinitialisé proprement au lieu de faire planter l'appli
+- **`schemaVersion`** ajouté à chaque sauvegarde de projet — sert de point d'ancrage pour de futures migrations automatiques (notamment quand l'IPv6 changera la forme des données)
+- Le chargement et l'application de l'état sont maintenant **protégés par try/catch** : en cas de souci imprévu, l'app démarre sur un état vide propre plutôt que de rester bloquée
+- **Notice discrète** (toast ambre en haut de l'écran, 8s) si une restauration partielle a eu lieu, listant les champs concernés — plus d'échec silencieux
+
+### 2026-07-10 — Projets nommés multiples
+- **Nouveau sélecteur de projet** en haut de la section sidebar : plus une seule sauvegarde auto globale, mais une liste de projets nommés, chacun avec son propre état complet (VLANs, équipements, règles firewall, DNS...)
+- **Boutons + Nouveau / ✎ Renommer / 🗑 Supprimer** — la suppression du dernier projet restant est bloquée pour ne jamais se retrouver sans aucun projet
+- **Migration automatique et silencieuse** : l'ancienne sauvegarde unique (si présente) est reprise telle quelle dans un premier projet "Projet 1" au premier chargement après la mise à jour — aucune perte de données
+- L'auto-save fonctionne à l'identique, mais écrit désormais dans le projet actif ; changer de projet recharge la page pour repartir sur un état propre
+- **Export/Import JSON** inchangés dans leur usage, mais désormais scopés au projet actif uniquement (le nom du projet est repris dans le nom du fichier exporté)
+
 ### 2026-07-06 — Sécurisation de base des équipements
 - Section **Sécurité** commune aux switchs et routeurs de Topologie : mot de passe enable (secret), utilisateur local, mot de passe, activation SSH (avec nom de domaine + génération de clé RSA), bannière MOTD
 - Génère aussi automatiquement le `hostname` à partir du nom de l'équipement (caractères non valides filtrés)
