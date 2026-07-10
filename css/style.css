@@ -892,6 +892,7 @@ body {
 .device-icon.router { background: var(--magenta); }
 .device-icon.pc { background: var(--amber); }
 .device-icon.server { background: #5CFFA0; }
+.device-icon.ap { background: #FF5C7A; }
 
 .topology-diagram-wrap {
   margin-top: 12px;

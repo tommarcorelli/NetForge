@@ -18,6 +18,7 @@ function saveState() {
       deviceNat: typeof deviceNat !== 'undefined' ? deviceNat : {},
       deviceEtherchannels: typeof deviceEtherchannels !== 'undefined' ? deviceEtherchannels : {},
       deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},
+      deviceWifi: typeof deviceWifi !== 'undefined' ? deviceWifi : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
@@ -733,12 +734,13 @@ const deviceOspf = {};         // deviceId -> {enabled, pid, area}
 const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, staticMappings}
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
+const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vlanId, band, channel}
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
 
-const deviceTypeIcons = { switch: 'SW', router: 'R', pc: 'PC', server: 'SRV' };
-const deviceTypeLabels = { switch: 'switch', router: 'routeur', pc: 'PC', server: 'serveur' };
+const deviceTypeIcons = { switch: 'SW', router: 'R', pc: 'PC', server: 'SRV', ap: 'AP' };
+const deviceTypeLabels = { switch: 'switch', router: 'routeur', pc: 'PC', server: 'serveur', ap: 'point d\'accès' };
 
 function renderDeviceList() {
   if (devices.length === 0) {
@@ -816,7 +818,7 @@ function renderTopologyDiagram() {
 
   const width = 560, height = 280, cx = width / 2, cy = height / 2;
   const radius = devices.length <= 1 ? 0 : Math.min(200, 90 + devices.length * 14);
-  const colors = { switch: '#4CF3FF', router: '#C25CFF', pc: '#FFB454', server: '#5CFFA0' };
+  const colors = { switch: '#4CF3FF', router: '#C25CFF', pc: '#FFB454', server: '#5CFFA0', ap: '#FF5C7A' };
 
   const positions = {};
   devices.forEach((d, i) => {
@@ -1025,6 +1027,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceNat[id] = { patEnabled: false, outsideIface: '', staticMappings: [] };
   deviceEtherchannels[id] = [];
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
+  deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1052,6 +1055,7 @@ document.addEventListener('click', (e) => {
     delete deviceNat[id];
     delete deviceEtherchannels[id];
     delete deviceVtp[id];
+    delete deviceWifi[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -1670,6 +1674,87 @@ function renderDeviceConfigPanel() {
       saveState();
     });
 
+  } else if (device.type === 'ap') {
+    const wifi = deviceWifi[selectedDeviceId] || { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
+
+    deviceConfigPanel.innerHTML = `
+      <div class="device-config">
+        <div class="device-config-title">Configuration — ${device.name} (point d'accès)</div>
+
+        <div class="builder-row">
+          <div class="mini-field grow">
+            <label>SSID</label>
+            <input type="text" id="ap-ssid" value="${wifi.ssid}" placeholder="SISR-WIFI">
+          </div>
+          <div class="mini-field">
+            <label>Sécurité</label>
+            <select id="ap-security">
+              <option value="open" ${wifi.security === 'open' ? 'selected' : ''}>Ouvert</option>
+              <option value="wpa2-psk" ${wifi.security === 'wpa2-psk' ? 'selected' : ''}>WPA2-PSK</option>
+              <option value="wpa2-enterprise" ${wifi.security === 'wpa2-enterprise' ? 'selected' : ''}>WPA2-Enterprise</option>
+            </select>
+          </div>
+          <div class="mini-field grow" id="ap-passphrase-field" style="${wifi.security === 'wpa2-psk' ? '' : 'display:none;'}">
+            <label>Passphrase</label>
+            <input type="text" id="ap-passphrase" value="${wifi.passphrase}" placeholder="8 caractères minimum">
+          </div>
+        </div>
+
+        <div class="builder-row" style="margin-top:12px;">
+          <div class="mini-field grow">
+            <label>VLAN associé</label>
+            <select id="ap-vlan"></select>
+          </div>
+          <div class="mini-field">
+            <label>Bande</label>
+            <select id="ap-band">
+              <option value="2.4" ${wifi.band === '2.4' ? 'selected' : ''}>2.4 GHz</option>
+              <option value="5" ${wifi.band === '5' ? 'selected' : ''}>5 GHz</option>
+            </select>
+          </div>
+          <div class="mini-field">
+            <label>Canal</label>
+            <input type="text" id="ap-channel" value="${wifi.channel}" placeholder="6">
+          </div>
+          <button class="btn-add" id="ap-save-btn">Enregistrer</button>
+        </div>
+        <div class="error hidden" id="ap-error"></div>
+      </div>
+    `;
+
+    const apVlanSelect = document.getElementById('ap-vlan');
+    apVlanSelect.innerHTML = topoVlanState.length === 0
+      ? '<option value="">— aucun VLAN —</option>'
+      : topoVlanState.map(v => `<option value="${v.id}" ${wifi.vlanId === v.id ? 'selected' : ''}>${v.id} — ${v.name}</option>`).join('');
+
+    document.getElementById('ap-security').addEventListener('change', (e) => {
+      document.getElementById('ap-passphrase-field').style.display = e.target.value === 'wpa2-psk' ? 'flex' : 'none';
+    });
+
+    document.getElementById('ap-save-btn').addEventListener('click', () => {
+      const security = document.getElementById('ap-security').value;
+      const passphrase = document.getElementById('ap-passphrase').value.trim();
+      const errorBox = document.getElementById('ap-error');
+      errorBox.classList.add('hidden');
+
+      if (security === 'wpa2-psk' && passphrase.length > 0 && passphrase.length < 8) {
+        errorBox.textContent = 'La passphrase WPA2 doit faire au moins 8 caractères.';
+        errorBox.classList.remove('hidden');
+        return;
+      }
+
+      deviceWifi[selectedDeviceId] = {
+        ssid: document.getElementById('ap-ssid').value.trim() || 'SISR-WIFI',
+        security,
+        passphrase,
+        vlanId: apVlanSelect.value,
+        band: document.getElementById('ap-band').value,
+        channel: document.getElementById('ap-channel').value.trim() || '6'
+      };
+      renderDeviceConfigPanel();
+      saveState();
+    });
+
   } else {
     // PC / Serveur
     deviceInterfaces[selectedDeviceId][0] = deviceInterfaces[selectedDeviceId][0] || { name: 'eth0', mode: 'static', ip: '', gateway: '', dns: '', vlanId: '' };
@@ -1994,9 +2079,54 @@ function generateHostDeviceConfig(device) {
   return lines.join('\n');
 }
 
+function generateApDeviceConfig(device) {
+  const wifi = deviceWifi[device.id];
+  const lines = [];
+  lines.push(`! === ${device.name} (point d'accès autonome) — généré par NetForge ===`);
+  lines.push('!');
+
+  if (!wifi || !wifi.ssid) {
+    lines.push('! Aucun SSID configuré.');
+    return lines.join('\n');
+  }
+
+  lines.push(`dot11 ssid ${wifi.ssid}`);
+  if (wifi.vlanId) lines.push(` vlan ${wifi.vlanId}`);
+
+  if (wifi.security === 'open') {
+    lines.push(' authentication open');
+  } else if (wifi.security === 'wpa2-psk') {
+    lines.push(' authentication open');
+    lines.push(' authentication key-management wpa version 2');
+    lines.push(` wpa-psk ascii ${wifi.passphrase || '<A_DEFINIR>'}`);
+  } else {
+    lines.push(' authentication network-eap eap_methods');
+    lines.push(' authentication key-management wpa version 2');
+  }
+  lines.push('!');
+
+  const radioIface = wifi.band === '5' ? 'Dot11Radio0/1/0' : 'Dot11Radio0/0/0';
+  lines.push(`interface ${radioIface}`);
+  lines.push(' encryption mode ciphers aes-ccm');
+  lines.push(` ssid ${wifi.ssid}`);
+  lines.push(` channel ${wifi.channel}`);
+  lines.push(' no shutdown');
+  lines.push('!');
+
+  if (wifi.vlanId) {
+    lines.push(`interface ${radioIface}.${wifi.vlanId}`);
+    lines.push(` encapsulation dot1Q ${wifi.vlanId}`);
+    lines.push(' bridge-group 1');
+    lines.push('!');
+  }
+
+  return lines.join('\n');
+}
+
 function generateDeviceConfig(device) {
   if (device.type === 'switch') return generateSwitchDeviceConfig(device);
   if (device.type === 'router') return generateRouterDeviceConfig(device);
+  if (device.type === 'ap') return generateApDeviceConfig(device);
   return generateHostDeviceConfig(device);
 }
 const topologyError = document.getElementById('topology-error');
@@ -2113,6 +2243,7 @@ if (savedState) {
   if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
   if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
   if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
+  if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
   if (savedState.links) links = savedState.links;
   if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
 }
