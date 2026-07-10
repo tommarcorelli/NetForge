@@ -50,6 +50,12 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — Module Wifi/WLAN (point d'accès)
+- **Nouveau type d'équipement "Point d'accès WiFi"** dans Topologie
+- Configuration : SSID, sécurité (Ouvert / WPA2-PSK / WPA2-Enterprise), passphrase (validée ≥ 8 caractères), VLAN associé, bande (2.4/5 GHz), canal
+- Génère une config Cisco Autonomous AP réaliste : `dot11 ssid`, interface radio, sous-interface bridgée sur le VLAN choisi
+- Intégré au schéma visuel et à l'export ZIP complet comme les autres équipements
+
 ### 2026-07-06 — VTP sur les switchs de Topologie
 - Section **VTP** en tête du panneau switch : mode (Server/Client/Transparent/Désactivé), domaine, version (1/2/3), mot de passe optionnel
 - Note pédagogique automatique en mode Client : les VLANs sont reçus du serveur VTP, la déclaration locale est indicative seulement (comportement réel du protocole)
