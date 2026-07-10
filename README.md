@@ -50,6 +50,12 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — Sécurisation de base des équipements
+- Section **Sécurité** commune aux switchs et routeurs de Topologie : mot de passe enable (secret), utilisateur local, mot de passe, activation SSH (avec nom de domaine + génération de clé RSA), bannière MOTD
+- Génère aussi automatiquement le `hostname` à partir du nom de l'équipement (caractères non valides filtrés)
+- Si SSH activé : `ip domain-name`, `crypto key generate rsa`, `ip ssh version 2`, VTY en `transport input ssh` + `login local`
+- Si SSH désactivé mais utilisateur renseigné : VTY simple en `login local`
+
 ### 2026-07-06 — VPN Site-à-Site IPsec
 - Section **VPN Site-à-Site (IPsec)** dans le panneau routeur : IP du pair distant, clé pré-partagée, réseaux local/distant à protéger, interface sortante, chiffrement (AES-256/128/3DES), hachage (SHA/MD5), groupe Diffie-Hellman (2/5/14)
 - Génère la chaîne complète Cisco IOS classique : `crypto isakmp policy` (Phase 1), `crypto isakmp key`, `crypto ipsec transform-set` (Phase 2), ACL de trafic intéressant avec wildcard mask calculé automatiquement, `crypto map`, application sur l'interface WAN
