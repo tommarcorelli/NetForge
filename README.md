@@ -50,6 +50,11 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — Validation automatique de la topologie
+- **Bouton "✓ Valider la topologie"** dans Topologie, à côté du bouton de génération
+- Détecte : adresses IP dupliquées entre équipements, IP d'un poste hors du réseau de son VLAN déclaré, passerelle manquante ou incohérente avec la SVI du VLAN, domaines VTP différents entre switchs, équipements isolés (sans lien dans le schéma)
+- Résultats affichés par niveau (erreur / avertissement) avec le détail de chaque problème
+
 ### 2026-07-06 — Module Wifi/WLAN (point d'accès)
 - **Nouveau type d'équipement "Point d'accès WiFi"** dans Topologie
 - Configuration : SSID, sécurité (Ouvert / WPA2-PSK / WPA2-Enterprise), passphrase (validée ≥ 8 caractères), VLAN associé, bande (2.4/5 GHz), canal
