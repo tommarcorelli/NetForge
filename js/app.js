@@ -20,6 +20,7 @@ function saveState() {
       deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},
       deviceWifi: typeof deviceWifi !== 'undefined' ? deviceWifi : {},
       deviceStp: typeof deviceStp !== 'undefined' ? deviceStp : {},
+      deviceVpn: typeof deviceVpn !== 'undefined' ? deviceVpn : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
@@ -737,6 +738,7 @@ const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMo
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
 const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vlanId, band, channel}
 const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard}
+const deviceVpn = {};              // deviceId -> {enabled, peerIp, presharedKey, localNetwork, remoteNetwork, outsideIface, encryption, hash, dhGroup}
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -1031,6 +1033,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
   deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
+  deviceVpn[id] = { enabled: false, peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha', dhGroup: '2' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1060,6 +1063,7 @@ document.addEventListener('click', (e) => {
     delete deviceVtp[id];
     delete deviceWifi[id];
     delete deviceStp[id];
+    delete deviceVpn[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -1498,6 +1502,66 @@ function renderDeviceConfigPanel() {
           <button class="btn-add" id="dev-nat-add-static-btn">+ Ajouter</button>
         </div>
         <div class="port-rows" id="dev-nat-static-rows"></div>
+
+        <div class="subsection-label">VPN Site-à-Site (IPsec)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Activer ?</label>
+            <select id="dev-vpn-enabled">
+              <option value="no">Non</option>
+              <option value="yes">Oui</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>IP du pair distant (WAN)</label>
+            <input type="text" id="dev-vpn-peer" placeholder="203.0.113.20">
+          </div>
+          <div class="mini-field grow">
+            <label>Clé pré-partagée</label>
+            <input type="text" id="dev-vpn-psk" placeholder="MaCleSecrete123">
+          </div>
+        </div>
+        <div class="builder-row" style="margin-top:10px;">
+          <div class="mini-field grow">
+            <label>Réseau local à protéger</label>
+            <input type="text" id="dev-vpn-local-net" placeholder="192.168.10.0/24">
+          </div>
+          <div class="mini-field grow">
+            <label>Réseau distant à protéger</label>
+            <input type="text" id="dev-vpn-remote-net" placeholder="192.168.20.0/24">
+          </div>
+          <div class="mini-field grow">
+            <label>Interface sortante (WAN)</label>
+            <select id="dev-vpn-outside"></select>
+          </div>
+        </div>
+        <div class="builder-row" style="margin-top:10px;">
+          <div class="mini-field">
+            <label>Chiffrement</label>
+            <select id="dev-vpn-encryption">
+              <option value="aes 256">AES-256</option>
+              <option value="aes 128">AES-128</option>
+              <option value="3des">3DES</option>
+            </select>
+          </div>
+          <div class="mini-field">
+            <label>Hachage</label>
+            <select id="dev-vpn-hash">
+              <option value="sha">SHA</option>
+              <option value="md5">MD5</option>
+            </select>
+          </div>
+          <div class="mini-field">
+            <label>Groupe DH</label>
+            <select id="dev-vpn-dhgroup">
+              <option value="2">Groupe 2</option>
+              <option value="5">Groupe 5</option>
+              <option value="14">Groupe 14</option>
+            </select>
+          </div>
+          <button class="btn-add" id="dev-vpn-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint" id="dev-vpn-hint">Configure aussi le routeur distant avec les réseaux local/distant inversés et la même clé.</div>
       </div>
     `;
 
@@ -1716,6 +1780,43 @@ function renderDeviceConfigPanel() {
       document.getElementById('dev-nat-local').value = '';
       document.getElementById('dev-nat-global').value = '';
       renderNatStaticRows();
+      saveState();
+    });
+
+    // ---- VPN Site-à-Site (IPsec) ----
+    const vpnOutsideSelect = document.getElementById('dev-vpn-outside');
+    vpnOutsideSelect.innerHTML = ifaceFullNames.length === 0
+      ? '<option value="">— aucune interface avec IP —</option>'
+      : ifaceFullNames.map(name => `<option value="${name}">${name}</option>`).join('');
+
+    const vpn = deviceVpn[selectedDeviceId] || { enabled: false, peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha', dhGroup: '2' };
+    document.getElementById('dev-vpn-enabled').value = vpn.enabled ? 'yes' : 'no';
+    document.getElementById('dev-vpn-peer').value = vpn.peerIp;
+    document.getElementById('dev-vpn-psk').value = vpn.presharedKey;
+    document.getElementById('dev-vpn-local-net').value = vpn.localNetwork;
+    document.getElementById('dev-vpn-remote-net').value = vpn.remoteNetwork;
+    document.getElementById('dev-vpn-encryption').value = vpn.encryption;
+    document.getElementById('dev-vpn-hash').value = vpn.hash;
+    document.getElementById('dev-vpn-dhgroup').value = vpn.dhGroup;
+    if (vpn.outsideIface) vpnOutsideSelect.value = vpn.outsideIface;
+
+    document.getElementById('dev-vpn-save-btn').addEventListener('click', () => {
+      const peerIp = document.getElementById('dev-vpn-peer').value.trim();
+      const localNet = document.getElementById('dev-vpn-local-net').value.trim();
+      const remoteNet = document.getElementById('dev-vpn-remote-net').value.trim();
+
+      deviceVpn[selectedDeviceId] = {
+        enabled: document.getElementById('dev-vpn-enabled').value === 'yes',
+        peerIp,
+        presharedKey: document.getElementById('dev-vpn-psk').value.trim(),
+        localNetwork: localNet,
+        remoteNetwork: remoteNet,
+        outsideIface: vpnOutsideSelect.value,
+        encryption: document.getElementById('dev-vpn-encryption').value,
+        hash: document.getElementById('dev-vpn-hash').value,
+        dhGroup: document.getElementById('dev-vpn-dhgroup').value
+      };
+      renderDeviceConfigPanel();
       saveState();
     });
 
@@ -2068,6 +2169,44 @@ function generateRouterDeviceConfig(device) {
     }
   }
 
+  const vpn = deviceVpn[device.id];
+  if (vpn && vpn.enabled && vpn.peerIp && vpn.outsideIface && vpn.localNetwork && vpn.remoteNetwork) {
+    lines.push('! --- VPN Site-à-Site (IPsec) ---');
+    lines.push('crypto isakmp policy 10');
+    lines.push(` encryption ${vpn.encryption}`);
+    lines.push(` hash ${vpn.hash}`);
+    lines.push(' authentication pre-share');
+    lines.push(` group ${vpn.dhGroup}`);
+    lines.push('!');
+    lines.push(`crypto isakmp key ${vpn.presharedKey || '<A_DEFINIR>'} address ${vpn.peerIp}`);
+    lines.push('!');
+
+    const espEncryption = vpn.encryption === '3des' ? 'esp-3des' : `esp-${vpn.encryption}`;
+    lines.push(`crypto ipsec transform-set NETFORGE-TSET ${espEncryption} esp-${vpn.hash}-hmac`);
+    lines.push('!');
+
+    const [localIp, localCidr] = vpn.localNetwork.split('/');
+    const [remoteIp, remoteCidr] = vpn.remoteNetwork.split('/');
+    const localMaskInt = maskFromCidr(parseInt(localCidr, 10));
+    const remoteMaskInt = maskFromCidr(parseInt(remoteCidr, 10));
+    const localNet = intToIp((ipToInt(localIp) & localMaskInt) >>> 0);
+    const remoteNet = intToIp((ipToInt(remoteIp) & remoteMaskInt) >>> 0);
+    const localWildcard = intToIp((~localMaskInt) >>> 0);
+    const remoteWildcard = intToIp((~remoteMaskInt) >>> 0);
+
+    lines.push('ip access-list extended NETFORGE-VPN-ACL');
+    lines.push(` permit ip ${localNet} ${localWildcard} ${remoteNet} ${remoteWildcard}`);
+    lines.push('!');
+    lines.push('crypto map NETFORGE-VPNMAP 10 ipsec-isakmp');
+    lines.push(` set peer ${vpn.peerIp}`);
+    lines.push(' set transform-set NETFORGE-TSET');
+    lines.push(' match address NETFORGE-VPN-ACL');
+    lines.push('!');
+    lines.push(`interface ${vpn.outsideIface}`);
+    lines.push(' crypto map NETFORGE-VPNMAP');
+    lines.push('!');
+  }
+
   const routes = deviceRoutes[device.id] || [];
   if (routes.length > 0) {
     lines.push('! --- Routes statiques ---');
@@ -2411,6 +2550,7 @@ if (savedState) {
   if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
   if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
   if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
+  if (savedState.deviceVpn) Object.assign(deviceVpn, savedState.deviceVpn);
   if (savedState.links) links = savedState.links;
   if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
 }
