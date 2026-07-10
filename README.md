@@ -50,6 +50,10 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-07-06 — STP avancé
+- Section **STP** dans le panneau switch : mode (Rapid-PVST+/PVST+/MST), priorité (pour influencer l'élection du root bridge), BPDU Guard sur les ports accès, Root Guard sur les ports trunk
+- Priorité basse (4096, 8192...) appliquée à tous les VLANs déclarés — pratique pour désigner explicitement le root bridge d'un TP
+
 ### 2026-07-06 — Validation automatique de la topologie
 - **Bouton "✓ Valider la topologie"** dans Topologie, à côté du bouton de génération
 - Détecte : adresses IP dupliquées entre équipements, IP d'un poste hors du réseau de son VLAN déclaré, passerelle manquante ou incohérente avec la SVI du VLAN, domaines VTP différents entre switchs, équipements isolés (sans lien dans le schéma)
