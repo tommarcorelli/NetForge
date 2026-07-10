@@ -21,6 +21,7 @@ function saveState() {
       deviceWifi: typeof deviceWifi !== 'undefined' ? deviceWifi : {},
       deviceStp: typeof deviceStp !== 'undefined' ? deviceStp : {},
       deviceVpn: typeof deviceVpn !== 'undefined' ? deviceVpn : {},
+      deviceSecurity: typeof deviceSecurity !== 'undefined' ? deviceSecurity : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
@@ -739,6 +740,7 @@ const deviceVtp = {};             // deviceId -> {mode, domain, version, passwor
 const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vlanId, band, channel}
 const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard}
 const deviceVpn = {};              // deviceId -> {enabled, peerIp, presharedKey, localNetwork, remoteNetwork, outsideIface, encryption, hash, dhGroup}
+const deviceSecurity = {};         // deviceId -> {enableSecret, username, userPassword, sshEnabled, domain, banner}
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -1034,6 +1036,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
   deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
   deviceVpn[id] = { enabled: false, peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha', dhGroup: '2' };
+  deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1064,6 +1067,7 @@ document.addEventListener('click', (e) => {
     delete deviceWifi[id];
     delete deviceStp[id];
     delete deviceVpn[id];
+    delete deviceSecurity[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -1077,6 +1081,67 @@ document.addEventListener('click', (e) => {
   }
 });
 
+function securityBlockHtml() {
+  return `
+    <div class="subsection-label">Sécurité de l'équipement</div>
+    <div class="builder-row">
+      <div class="mini-field grow">
+        <label>Mot de passe enable (secret)</label>
+        <input type="text" id="dev-sec-enable" placeholder="cisco123">
+      </div>
+      <div class="mini-field grow">
+        <label>Utilisateur local</label>
+        <input type="text" id="dev-sec-username" placeholder="admin">
+      </div>
+      <div class="mini-field grow">
+        <label>Mot de passe utilisateur</label>
+        <input type="text" id="dev-sec-userpass" placeholder="cisco123">
+      </div>
+    </div>
+    <div class="builder-row" style="margin-top:10px;">
+      <div class="mini-field">
+        <label>Activer SSH ?</label>
+        <select id="dev-sec-ssh">
+          <option value="no">Non</option>
+          <option value="yes">Oui</option>
+        </select>
+      </div>
+      <div class="mini-field grow">
+        <label>Nom de domaine (requis pour SSH)</label>
+        <input type="text" id="dev-sec-domain" placeholder="sisr.local">
+      </div>
+      <div class="mini-field grow">
+        <label>Bannière MOTD (optionnel)</label>
+        <input type="text" id="dev-sec-banner" placeholder="Accès réservé au personnel autorisé">
+      </div>
+      <button class="btn-add" id="dev-sec-save-btn">Enregistrer</button>
+    </div>
+  `;
+}
+
+function wireSecurityBlock() {
+  const sec = deviceSecurity[selectedDeviceId] || { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
+  document.getElementById('dev-sec-enable').value = sec.enableSecret;
+  document.getElementById('dev-sec-username').value = sec.username;
+  document.getElementById('dev-sec-userpass').value = sec.userPassword;
+  document.getElementById('dev-sec-ssh').value = sec.sshEnabled ? 'yes' : 'no';
+  document.getElementById('dev-sec-domain').value = sec.domain;
+  document.getElementById('dev-sec-banner').value = sec.banner;
+
+  document.getElementById('dev-sec-save-btn').addEventListener('click', () => {
+    deviceSecurity[selectedDeviceId] = {
+      enableSecret: document.getElementById('dev-sec-enable').value.trim(),
+      username: document.getElementById('dev-sec-username').value.trim(),
+      userPassword: document.getElementById('dev-sec-userpass').value.trim(),
+      sshEnabled: document.getElementById('dev-sec-ssh').value === 'yes',
+      domain: document.getElementById('dev-sec-domain').value.trim(),
+      banner: document.getElementById('dev-sec-banner').value.trim()
+    };
+    renderDeviceConfigPanel();
+    saveState();
+  });
+}
+
 function renderDeviceConfigPanel() {
   if (!selectedDeviceId) {
     deviceConfigPanel.innerHTML = '';
@@ -1089,6 +1154,7 @@ function renderDeviceConfigPanel() {
     deviceConfigPanel.innerHTML = `
       <div class="device-config">
         <div class="device-config-title">Configuration — ${device.name} (switch)</div>
+        ${securityBlockHtml()}
 
         <div class="subsection-label">VTP (VLAN Trunking Protocol)</div>
         <div class="builder-row">
@@ -1210,6 +1276,8 @@ function renderDeviceConfigPanel() {
         <div class="port-rows" id="dev-ec-rows"></div>
       </div>
     `;
+
+    wireSecurityBlock();
 
     // ---- VTP ----
     const vtp = deviceVtp[selectedDeviceId] || { mode: 'off', domain: '', version: '2', password: '' };
@@ -1352,6 +1420,7 @@ function renderDeviceConfigPanel() {
     deviceConfigPanel.innerHTML = `
       <div class="device-config">
         <div class="device-config-title">Configuration — ${device.name} (routeur)</div>
+        ${securityBlockHtml()}
 
         <div class="subsection-label">Interfaces</div>
         <div class="builder-row">
@@ -1564,6 +1633,8 @@ function renderDeviceConfigPanel() {
         <div class="hint" id="dev-vpn-hint">Configure aussi le routeur distant avec les réseaux local/distant inversés et la même clé.</div>
       </div>
     `;
+
+    wireSecurityBlock();
 
     const devIfVlan = document.getElementById('dev-if-vlan');
     devIfVlan.innerHTML = topoVlanState.length === 0
@@ -1972,10 +2043,51 @@ function renderDeviceConfigPanel() {
   saveState();
 }
 
+function generateSecurityLines(device) {
+  const sec = deviceSecurity[device.id];
+  if (!sec) return [];
+  const lines = [];
+
+  const hostname = device.name.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (hostname) {
+    lines.push(`hostname ${hostname}`);
+    lines.push('!');
+  }
+
+  if (sec.enableSecret) {
+    lines.push(`enable secret ${sec.enableSecret}`);
+  }
+  if (sec.username) {
+    lines.push(`username ${sec.username} secret ${sec.userPassword || '<A_DEFINIR>'}`);
+  }
+  if (sec.banner) {
+    lines.push(`banner motd #${sec.banner}#`);
+  }
+  if (sec.enableSecret || sec.username || sec.banner) lines.push('!');
+
+  if (sec.sshEnabled) {
+    lines.push(`ip domain-name ${sec.domain || 'local'}`);
+    lines.push('crypto key generate rsa modulus 2048');
+    lines.push('ip ssh version 2');
+    lines.push('!');
+    lines.push('line vty 0 4');
+    lines.push(' transport input ssh');
+    lines.push(' login local');
+    lines.push('!');
+  } else if (sec.username) {
+    lines.push('line vty 0 4');
+    lines.push(' login local');
+    lines.push('!');
+  }
+
+  return lines;
+}
+
 function generateSwitchDeviceConfig(device) {
   const lines = [];
   lines.push(`! === ${device.name} (switch) — généré par NetForge ===`);
   lines.push('!');
+  lines.push(...generateSecurityLines(device));
 
   const vtp = deviceVtp[device.id];
   if (vtp && vtp.mode !== 'off' && vtp.domain) {
@@ -2068,6 +2180,7 @@ function generateRouterDeviceConfig(device) {
   const lines = [];
   lines.push(`! === ${device.name} (routeur) — généré par NetForge ===`);
   lines.push('!');
+  lines.push(...generateSecurityLines(device));
   lines.push('ip routing');
   lines.push('!');
 
@@ -2551,6 +2664,7 @@ if (savedState) {
   if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
   if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
   if (savedState.deviceVpn) Object.assign(deviceVpn, savedState.deviceVpn);
+  if (savedState.deviceSecurity) Object.assign(deviceSecurity, savedState.deviceSecurity);
   if (savedState.links) links = savedState.links;
   if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
 }
