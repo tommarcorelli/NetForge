@@ -137,8 +137,12 @@
       </div>
 
       <div class="panel">
-        <button class="btn" id="topology-generate-btn">Générer toute la topologie</button>
+        <div style="display:flex; gap:10px;">
+          <button class="btn" id="topology-generate-btn">Générer toute la topologie</button>
+          <button class="btn btn-outline" id="topology-validate-btn" style="margin-top:0;">✓ Valider la topologie</button>
+        </div>
         <div class="error hidden" id="topology-error"></div>
+        <div class="hidden" id="topology-validation-results" style="margin-top:16px;"></div>
         <div class="hidden" id="topology-results"></div>
       </div>
     </section>

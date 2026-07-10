@@ -2133,6 +2133,115 @@ const topologyError = document.getElementById('topology-error');
 const topologyResults = document.getElementById('topology-results');
 let lastTopologyOutputs = [];
 
+// ==================================================================
+// Validation automatique de la topologie
+// ==================================================================
+function collectAllIps() {
+  const entries = []; // { deviceName, label, ip }
+
+  devices.forEach(d => {
+    if (d.type === 'router') {
+      (deviceInterfaces[d.id] || []).forEach(iface => {
+        if (iface.ip) {
+          const label = iface.sub ? `${iface.name}.${iface.vlanId}` : iface.name;
+          entries.push({ deviceName: d.name, label, ip: iface.ip.split('/')[0] });
+        }
+      });
+    } else if (d.type === 'pc' || d.type === 'server') {
+      const host = (deviceInterfaces[d.id] || [])[0];
+      if (host && host.mode === 'static' && host.ip) {
+        entries.push({ deviceName: d.name, label: host.name, ip: host.ip.split('/')[0] });
+      }
+    }
+  });
+
+  return entries;
+}
+
+function validateTopology() {
+  const problems = []; // { level: 'error'|'warning', message }
+
+  if (devices.length === 0) {
+    return [{ level: 'warning', message: "Aucun équipement déclaré pour l'instant." }];
+  }
+
+  // 1. IP dupliquées
+  const ipEntries = collectAllIps();
+  const seenIps = {};
+  ipEntries.forEach(entry => {
+    if (!seenIps[entry.ip]) seenIps[entry.ip] = [];
+    seenIps[entry.ip].push(entry);
+  });
+  Object.entries(seenIps).forEach(([ip, entries]) => {
+    if (entries.length > 1) {
+      const where = entries.map(e => `${e.deviceName} (${e.label})`).join(', ');
+      problems.push({ level: 'error', message: `Adresse IP ${ip} utilisée plusieurs fois : ${where}` });
+    }
+  });
+
+  // 2. Hôtes : IP hors du réseau du VLAN déclaré (via la SVI du routeur, si elle existe)
+  devices.filter(d => d.type === 'pc' || d.type === 'server').forEach(d => {
+    const host = (deviceInterfaces[d.id] || [])[0];
+    if (!host || host.mode !== 'static' || !host.ip || !host.vlanId) return;
+
+    const svi = topoVlanState.find(v => v.id === host.vlanId && v.svi);
+    if (!svi) return;
+
+    const [sviIp, sviCidr] = svi.svi.split('/');
+    const maskInt = maskFromCidr(parseInt(sviCidr, 10));
+    const sviNetwork = ipToInt(sviIp) & maskInt;
+    const [hostIp] = host.ip.split('/');
+    const hostInt = ipToInt(hostIp);
+
+    if (hostInt !== null && (hostInt & maskInt) !== sviNetwork) {
+      problems.push({ level: 'error', message: `${d.name} : IP ${hostIp} n'appartient pas au réseau du VLAN ${host.vlanId} (SVI ${svi.svi})` });
+    }
+
+    if (!host.gateway) {
+      problems.push({ level: 'warning', message: `${d.name} : aucune passerelle renseignée (VLAN ${host.vlanId} a pourtant une SVI ${svi.svi})` });
+    } else if (host.gateway !== sviIp) {
+      problems.push({ level: 'warning', message: `${d.name} : passerelle ${host.gateway} différente de la SVI du VLAN ${host.vlanId} (${sviIp})` });
+    }
+  });
+
+  // 3. Switch en mode VTP client sans domaine, ou incohérence de domaine VTP entre switchs
+  const vtpDomains = new Set();
+  devices.filter(d => d.type === 'switch').forEach(d => {
+    const vtp = deviceVtp[d.id];
+    if (vtp && vtp.mode !== 'off' && vtp.domain) vtpDomains.add(vtp.domain);
+  });
+  if (vtpDomains.size > 1) {
+    problems.push({ level: 'warning', message: `Plusieurs domaines VTP différents détectés (${[...vtpDomains].join(', ')}) — les switchs ne pourront pas synchroniser leurs VLANs entre eux` });
+  }
+
+  // 4. Équipements isolés (aucun lien)
+  devices.forEach(d => {
+    const hasLink = links.some(l => l.a === d.id || l.b === d.id);
+    if (!hasLink && devices.length > 1) {
+      problems.push({ level: 'warning', message: `${d.name} n'est relié à aucun autre équipement dans le schéma` });
+    }
+  });
+
+  return problems;
+}
+
+document.getElementById('topology-validate-btn').addEventListener('click', () => {
+  const problems = validateTopology();
+  const box = document.getElementById('topology-validation-results');
+
+  if (problems.length === 0) {
+    box.innerHTML = `<div class="validation-row ok"><span class="validation-icon">✓</span> Aucun problème détecté.</div>`;
+  } else {
+    const errors = problems.filter(p => p.level === 'error');
+    const warnings = problems.filter(p => p.level === 'warning');
+    box.innerHTML = [
+      ...errors.map(p => `<div class="validation-row error"><span class="validation-icon">✕</span> ${p.message}</div>`),
+      ...warnings.map(p => `<div class="validation-row warning"><span class="validation-icon">⚠</span> ${p.message}</div>`)
+    ].join('');
+  }
+  box.classList.remove('hidden');
+});
+
 topologyGenerateBtn.addEventListener('click', () => {
   topologyError.classList.add('hidden');
   topologyResults.classList.add('hidden');
