@@ -19,6 +19,7 @@ function saveState() {
       deviceEtherchannels: typeof deviceEtherchannels !== 'undefined' ? deviceEtherchannels : {},
       deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},
       deviceWifi: typeof deviceWifi !== 'undefined' ? deviceWifi : {},
+      deviceStp: typeof deviceStp !== 'undefined' ? deviceStp : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
@@ -735,6 +736,7 @@ const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, static
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
 const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vlanId, band, channel}
+const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard}
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -1028,6 +1030,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceEtherchannels[id] = [];
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
+  deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1056,6 +1059,7 @@ document.addEventListener('click', (e) => {
     delete deviceEtherchannels[id];
     delete deviceVtp[id];
     delete deviceWifi[id];
+    delete deviceStp[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -1112,6 +1116,30 @@ function renderDeviceConfigPanel() {
           <button class="btn-add" id="dev-vtp-save-btn">Enregistrer</button>
         </div>
         <div class="hint" id="dev-vtp-hint"></div>
+
+        <div class="subsection-label">STP (Spanning Tree Protocol)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Mode</label>
+            <select id="dev-stp-mode">
+              <option value="rapid-pvst">Rapid-PVST+ (recommandé)</option>
+              <option value="pvst">PVST+</option>
+              <option value="mst">MST</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>Priorité (toutes VLANs, optionnel)</label>
+            <input type="text" id="dev-stp-priority" placeholder="ex: 4096 pour root bridge">
+          </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-stp-bpduguard"> BPDU Guard (ports accès)</label>
+          </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-stp-rootguard"> Root Guard (ports trunk)</label>
+          </div>
+          <button class="btn-add" id="dev-stp-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint" id="dev-stp-hint">Priorité basse (ex: 4096, 8192) = plus de chances de devenir root bridge. Par défaut Cisco : 32768.</div>
 
         <div class="builder-row">
           <div class="mini-field">
@@ -1194,6 +1222,23 @@ function renderDeviceConfigPanel() {
         domain: document.getElementById('dev-vtp-domain').value.trim(),
         version: document.getElementById('dev-vtp-version').value,
         password: document.getElementById('dev-vtp-password').value.trim()
+      };
+      renderDeviceConfigPanel();
+    });
+
+    // ---- STP ----
+    const stp = deviceStp[selectedDeviceId] || { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
+    document.getElementById('dev-stp-mode').value = stp.mode;
+    document.getElementById('dev-stp-priority').value = stp.priority;
+    document.getElementById('dev-stp-bpduguard').checked = stp.bpduGuard;
+    document.getElementById('dev-stp-rootguard').checked = stp.rootGuard;
+
+    document.getElementById('dev-stp-save-btn').addEventListener('click', () => {
+      deviceStp[selectedDeviceId] = {
+        mode: document.getElementById('dev-stp-mode').value,
+        priority: document.getElementById('dev-stp-priority').value.trim(),
+        bpduGuard: document.getElementById('dev-stp-bpduguard').checked,
+        rootGuard: document.getElementById('dev-stp-rootguard').checked
       };
       renderDeviceConfigPanel();
     });
@@ -1841,6 +1886,16 @@ function generateSwitchDeviceConfig(device) {
     lines.push('!');
   }
 
+  const stp = deviceStp[device.id];
+  if (stp) {
+    lines.push('! --- STP ---');
+    lines.push(`spanning-tree mode ${stp.mode}`);
+    if (stp.priority && topoVlanState.length > 0) {
+      lines.push(`spanning-tree vlan ${topoVlanState.map(v => v.id).join(',')} priority ${stp.priority}`);
+    }
+    lines.push('!');
+  }
+
   if (topoVlanState.length > 0) {
     if (vtp && vtp.mode === 'client') {
       lines.push('! Mode VTP client : les VLANs sont reçus du serveur VTP, pas besoin de les déclarer ici.');
@@ -1865,6 +1920,7 @@ function generateSwitchDeviceConfig(device) {
       lines.push(' switchport mode access');
       lines.push(` switchport access vlan ${p.vlanId}`);
       lines.push(' spanning-tree portfast');
+      if (stp && stp.bpduGuard) lines.push(' spanning-tree bpduguard enable');
       lines.push('!');
     });
   }
@@ -1876,6 +1932,7 @@ function generateSwitchDeviceConfig(device) {
       lines.push(' switchport trunk encapsulation dot1q');
       lines.push(' switchport mode trunk');
       lines.push(` switchport trunk allowed vlan ${topoVlanState.map(v => v.id).join(',')}`);
+      if (stp && stp.rootGuard) lines.push(' spanning-tree guard root');
       lines.push('!');
     });
   }
@@ -2353,6 +2410,7 @@ if (savedState) {
   if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
   if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
   if (savedState.deviceWifi) Object.assign(deviceWifi, savedState.deviceWifi);
+  if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
   if (savedState.links) links = savedState.links;
   if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
 }
