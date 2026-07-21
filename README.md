@@ -10,11 +10,11 @@ Fournir en un seul outil plusieurs générateurs de fichiers de config réseau, 
 
 | Module | Statut | Description |
 |---|---|---|
-| Subnetting / VLSM | ✅ V1 disponible | Calcul de plan d'adressage + découpage VLSM multi-sous-réseaux + binaire + type d'adresse + référence CIDR |
-| VLAN | ✅ V1 disponible | Génération de config switch Cisco IOS (VLANs, ports accès, ports trunk, SVI, voice VLAN, port-security) |
-| Firewall / ACL | ✅ V1 disponible | Génération iptables ou ACL Cisco, réorganisation, presets, testeur de règles |
-| **Topologie** | ✅ V1 disponible | Multi-équipements (switchs + routeurs + PC/serveurs), router-on-a-stick, DHCP, OSPF, sauvegarde auto, export ZIP |
-| **DNS** | ✅ V1 disponible | Génération de zone BIND (A, CNAME, MX, NS, PTR, TXT) |
+| Subnetting / VLSM | ✅ V2 disponible | Calcul de plan d'adressage + découpage VLSM multi-sous-réseaux + binaire + type d'adresse + référence CIDR + résumé de route (agrégation) + calculateur IPv6 |
+| VLAN | ✅ V2 disponible | Génération de config switch Cisco IOS (VLANs, ports accès, ports trunk, SVI, voice VLAN, port-security, DHCP snooping, storm-control) |
+| Firewall / ACL | ✅ V2 disponible | Génération iptables ou ACL Cisco, réorganisation, presets, testeur de règles, time-range, rate-limit, ACL réflexives (stateful) |
+| **Topologie** | ✅ V2 disponible | Multi-équipements (switchs + routeurs + PC/serveurs), router-on-a-stick, DHCP, OSPF, BGP, NAT (1:1 + redirection de port), sauvegarde auto, export ZIP |
+| **DNS** | ✅ V2 disponible | Génération de zone BIND (A, CNAME, MX, NS, PTR, TXT, SRV) + génération automatique de zone inverse |
 
 ## Structure du projet
 
@@ -49,6 +49,25 @@ python -m http.server 8000
 Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
+
+### 2026-07-21 — ACL IPv6 (Firewall)
+- **Firewall/ACL** : case "Adressage IPv6" (format Cisco) — génère une `ipv6 access-list` avec adresses en préfixe/longueur (ex: `2001:db8:acad::/64`) au lieu d'une ACL IPv4 à masque générique, avec `ipv6 traffic-filter` pour l'application sur interface. Compatible avec les ACL réflexives et la limitation de débit déjà existantes. Les object-groups réseau (IPv4 uniquement dans cet outil) sont automatiquement ignorés avec un avertissement en mode IPv6
+
+### 2026-07-21 — Deuxième vague d'enrichissement
+- **Firewall/ACL** : filtrage ICMP par type (echo-request, echo-reply, time-exceeded, unreachable, redirect), traduit en `--icmp-type` (iptables) ou mot-clé Cisco (`echo`, `unreachable`...)
+- **DNS** : nouveau type d'enregistrement **CAA** (autorité de certification autorisée à émettre un certificat pour le domaine)
+- **Topologie** : redistribution mutuelle **OSPF ↔ BGP** (cases à cocher dans les panneaux OSPF et BGP, génère `redistribute bgp <AS> subnets` / `redistribute ospf <PID>`)
+
+### 2026-07-21 — Enrichissement de tous les modules + correctif critique
+- **VLSM** : nouveau calculateur de résumé de route (agrégation CIDR) à partir d'une liste de sous-réseaux
+- **VLSM** : nouveau calculateur IPv6 (compression/expansion, type d'adresse, découpage en sous-réseaux /64)
+- **VLAN** : DHCP snooping global + ports de confiance, storm-control broadcast configurable par port
+- **Firewall/ACL** : plages horaires (time-range Cisco / `-m time` iptables), limitation de débit anti-DoS (police MQC / `-m limit`), et génération d'ACL réflexives (stateful) au format Cisco
+- **Topologie** : nouveau bloc BGP (eBGP simple) par routeur — AS, réseaux annoncés, voisins
+- **Topologie/NAT** : redirection de port (PAT statique) en plus du NAT 1:1 existant
+- **DNS** : nouveau type d'enregistrement SRV, génération automatique de la zone inverse (PTR) à partir des enregistrements A
+- **Correctif critique** : une variable (`topologyGenerateBtn`) n'était jamais déclarée, ce qui interrompait silencieusement l'exécution du script après le module Topologie et cassait entièrement les modules Firewall et DNS — corrigé
+- Toutes les nouvelles options sont persistées (sauvegarde automatique + rechargement de page)
 
 ### 2026-07-10 — Annuler / Rétablir (Ctrl+Z / Ctrl+Y) sur tous les modules
 - **Historique global** : chaque action qui modifie l'état (ajout/suppression de VLAN, équipement, règle, enregistrement DNS, config d'équipement...) devient annulable, jusqu'à **50 étapes en arrière**

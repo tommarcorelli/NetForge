@@ -72,10 +72,12 @@ const STATE_SHAPE = {
   networkGroups: 'array', serviceGroups: 'array',
   devicePorts: 'object', deviceInterfaces: 'object', deviceRoutes: 'object',
   deviceOspf: 'object', deviceNat: 'object', deviceEtherchannels: 'object',
+  deviceBgp: 'object',
   deviceVtp: 'object', deviceWifi: 'object', deviceStp: 'object',
   deviceVpn: 'object', deviceSecurity: 'object',
   deviceIdSeq: 'number',
-  fwPolicy: 'string', dnsZoneName: 'string', dnsPrimaryNs: 'string', dnsAdminEmail: 'string'
+  fwPolicy: 'string', dnsZoneName: 'string', dnsPrimaryNs: 'string', dnsAdminEmail: 'string', fwFormat: 'string',
+  vlanDhcpSnooping: 'boolean', fwReflexive: 'boolean', fwIpv6: 'boolean'
 };
 
 function isPlainObject(v) {
@@ -99,13 +101,14 @@ function sanitizeState(raw) {
     if (expected === 'array') ok = Array.isArray(value);
     else if (expected === 'object') ok = isPlainObject(value);
     else if (expected === 'number') ok = typeof value === 'number' && !Number.isNaN(value);
+    else if (expected === 'boolean') ok = typeof value === 'boolean';
     else ok = typeof value === 'string';
 
     if (ok) {
       clean[key] = value;
     } else {
       repairedFields.push(key);
-      clean[key] = expected === 'array' ? [] : expected === 'object' ? {} : expected === 'number' ? 1 : '';
+      clean[key] = expected === 'array' ? [] : expected === 'object' ? {} : expected === 'number' ? 1 : expected === 'boolean' ? false : '';
     }
   }
   return { state: clean, repairedFields };
@@ -164,6 +167,7 @@ function applyStateSnapshot(json) {
   replaceDict(deviceInterfaces, sanitized.deviceInterfaces);
   replaceDict(deviceRoutes, sanitized.deviceRoutes);
   replaceDict(deviceOspf, sanitized.deviceOspf);
+  replaceDict(deviceBgp, sanitized.deviceBgp);
   replaceDict(deviceNat, sanitized.deviceNat);
   replaceDict(deviceEtherchannels, sanitized.deviceEtherchannels);
   replaceDict(deviceVtp, sanitized.deviceVtp);
@@ -180,12 +184,21 @@ function applyStateSnapshot(json) {
 
   const fwPolicySelect = document.getElementById('fw-policy');
   if (fwPolicySelect) fwPolicySelect.value = sanitized.fwPolicy || 'DROP';
+  const fwFormatSelect = document.getElementById('fw-format');
+  if (fwFormatSelect) fwFormatSelect.value = sanitized.fwFormat || 'iptables';
   const zoneEl = document.getElementById('dns-zone-name');
   const nsEl = document.getElementById('dns-primary-ns');
   const emailEl = document.getElementById('dns-admin-email');
   if (zoneEl) zoneEl.value = sanitized.dnsZoneName || '';
   if (nsEl) nsEl.value = sanitized.dnsPrimaryNs || '';
   if (emailEl) emailEl.value = sanitized.dnsAdminEmail || '';
+  const dhcpSnoopEl = document.getElementById('vlan-dhcp-snooping');
+  if (dhcpSnoopEl) dhcpSnoopEl.checked = !!sanitized.vlanDhcpSnooping;
+  const fwReflexiveEl = document.getElementById('fw-reflexive');
+  if (fwReflexiveEl) fwReflexiveEl.checked = !!sanitized.fwReflexive;
+  const fwIpv6El = document.getElementById('fw-ipv6');
+  if (fwIpv6El) fwIpv6El.checked = !!sanitized.fwIpv6;
+  if (typeof updateFwFormatFieldsVisibility === 'function') updateFwFormatFieldsVisibility();
 
   if (selectedDeviceId && !devices.find(d => d.id === selectedDeviceId)) {
     selectedDeviceId = null;
@@ -260,6 +273,7 @@ function saveState() {
       deviceInterfaces: typeof deviceInterfaces !== 'undefined' ? deviceInterfaces : {},
       deviceRoutes: typeof deviceRoutes !== 'undefined' ? deviceRoutes : {},
       deviceOspf: typeof deviceOspf !== 'undefined' ? deviceOspf : {},
+      deviceBgp: typeof deviceBgp !== 'undefined' ? deviceBgp : {},
       deviceNat: typeof deviceNat !== 'undefined' ? deviceNat : {},
       deviceEtherchannels: typeof deviceEtherchannels !== 'undefined' ? deviceEtherchannels : {},
       deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},
@@ -271,12 +285,16 @@ function saveState() {
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],
       fwPolicy: (typeof document !== 'undefined' && document.getElementById('fw-policy')) ? document.getElementById('fw-policy').value : 'DROP',
+      fwFormat: (typeof document !== 'undefined' && document.getElementById('fw-format')) ? document.getElementById('fw-format').value : 'iptables',
       dnsRecords: typeof dnsRecords !== 'undefined' ? dnsRecords : [],
       networkGroups: typeof networkGroups !== 'undefined' ? networkGroups : [],
       serviceGroups: typeof serviceGroups !== 'undefined' ? serviceGroups : [],
       dnsZoneName: (typeof document !== 'undefined' && document.getElementById('dns-zone-name')) ? document.getElementById('dns-zone-name').value : '',
       dnsPrimaryNs: (typeof document !== 'undefined' && document.getElementById('dns-primary-ns')) ? document.getElementById('dns-primary-ns').value : '',
-      dnsAdminEmail: (typeof document !== 'undefined' && document.getElementById('dns-admin-email')) ? document.getElementById('dns-admin-email').value : ''
+      dnsAdminEmail: (typeof document !== 'undefined' && document.getElementById('dns-admin-email')) ? document.getElementById('dns-admin-email').value : '',
+      vlanDhcpSnooping: (typeof document !== 'undefined' && document.getElementById('vlan-dhcp-snooping')) ? document.getElementById('vlan-dhcp-snooping').checked : false,
+      fwReflexive: (typeof document !== 'undefined' && document.getElementById('fw-reflexive')) ? document.getElementById('fw-reflexive').checked : false,
+      fwIpv6: (typeof document !== 'undefined' && document.getElementById('fw-ipv6')) ? document.getElementById('fw-ipv6').checked : false
     };
     state.schemaVersion = CURRENT_SCHEMA_VERSION;
     const active = getActiveProject();
@@ -700,6 +718,220 @@ vlsmBase.addEventListener('input', () => {
   capacityHint.className = 'hint hint-ok';
 });
 
+// ---- Résumé de route (agrégation / summarization) ----
+function calculateSummary(input) {
+  const tokens = input.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+  if (tokens.length < 2) throw new Error("Indique au moins deux réseaux à résumer, ex : 192.168.0.0/24, 192.168.1.0/24");
+
+  const nets = tokens.map(t => {
+    const match = t.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
+    if (!match) throw new Error(`Réseau invalide : "${t}" — format attendu ex. 192.168.0.0/24`);
+    const cidr = parseInt(match[2], 10);
+    if (cidr < 0 || cidr > 32) throw new Error(`CIDR invalide dans "${t}"`);
+    const ipInt = ipToInt(match[1]);
+    if (ipInt === null) throw new Error(`Adresse IP invalide dans "${t}"`);
+    const networkInt = (ipInt & maskFromCidr(cidr)) >>> 0;
+    return { networkInt, cidr, size: Math.pow(2, 32 - cidr), original: t };
+  });
+
+  // Trouve le plus petit CIDR commun (le plus englobant) tel que tous les réseaux
+  // tiennent dans un unique bloc aligné, en partant du CIDR le plus restrictif observé.
+  const minCidr = Math.min(...nets.map(n => n.cidr));
+  let commonCidr = minCidr;
+
+  for (let c = minCidr; c >= 0; c--) {
+    const blockMask = maskFromCidr(c);
+    const firstBlock = nets[0].networkInt & blockMask;
+    const allSameBlock = nets.every(n => (n.networkInt & blockMask) === firstBlock);
+    if (allSameBlock) {
+      commonCidr = c;
+      break;
+    }
+    if (c === 0) commonCidr = 0;
+  }
+
+  const blockMask = maskFromCidr(commonCidr);
+  const summaryNetworkInt = (nets[0].networkInt & blockMask) >>> 0;
+  const summarySize = Math.pow(2, 32 - commonCidr);
+
+  // Calcule l'espace réellement occupé par les réseaux fournis pour signaler
+  // si l'agrégation englobe aussi des adresses non couvertes par la demande initiale.
+  const totalRequested = nets.reduce((sum, n) => sum + n.size, 0);
+  const overshoot = summarySize > totalRequested;
+
+  return {
+    network: intToIp(summaryNetworkInt),
+    cidr: commonCidr,
+    mask: intToIp(blockMask),
+    size: summarySize,
+    count: nets.length,
+    overshoot,
+    totalRequested
+  };
+}
+
+const summaryBtn = document.getElementById('summary-btn');
+const summaryNetworksInput = document.getElementById('summary-networks');
+const summaryError = document.getElementById('summary-error');
+const summaryResults = document.getElementById('summary-results');
+const summaryNote = document.getElementById('summary-note');
+
+summaryBtn.addEventListener('click', () => {
+  summaryError.classList.add('hidden');
+  summaryResults.classList.add('hidden');
+  summaryNote.classList.add('hidden');
+  try {
+    const result = calculateSummary(summaryNetworksInput.value);
+    document.getElementById('summary-route').textContent = `${result.network}/${result.cidr}`;
+    document.getElementById('summary-count').textContent = `${result.count} réseaux`;
+    document.getElementById('summary-space').textContent = `${result.size} adresses (masque ${result.mask})`;
+    summaryResults.classList.remove('hidden');
+    if (result.overshoot) {
+      summaryNote.textContent = `⚠ Cette route résumée couvre ${result.size} adresses alors que ${result.totalRequested} seulement étaient demandées : elle inclut donc des sous-réseaux supplémentaires non listés ici. C'est normal (l'agrégation CIDR doit être un bloc aligné en puissance de 2) mais à vérifier avant de l'annoncer en production.`;
+      summaryNote.classList.remove('hidden');
+    }
+  } catch (e) {
+    summaryError.textContent = e.message;
+    summaryError.classList.remove('hidden');
+  }
+});
+
+// ---- Calculateur IPv6 ----
+function parseIPv6ToBigInt(addr) {
+  addr = addr.trim();
+  if (!addr) return null;
+  const hasDoubleColon = addr.includes('::');
+  if ((addr.match(/::/g) || []).length > 1) return null;
+
+  let head = addr, tail = '';
+  if (hasDoubleColon) {
+    const parts = addr.split('::');
+    head = parts[0];
+    tail = parts[1] || '';
+  }
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+
+  if (!hasDoubleColon && headGroups.length !== 8) return null;
+  if (hasDoubleColon && headGroups.length + tailGroups.length >= 8) return null;
+
+  const allGroups = [...headGroups];
+  if (hasDoubleColon) {
+    const missing = 8 - headGroups.length - tailGroups.length;
+    for (let i = 0; i < missing; i++) allGroups.push('0');
+    allGroups.push(...tailGroups);
+  }
+  if (allGroups.length !== 8) return null;
+
+  let big = 0n;
+  for (const g of allGroups) {
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+    big = (big << 16n) | BigInt(parseInt(g, 16));
+  }
+  return big;
+}
+
+function bigIntToIPv6Groups(big) {
+  const groups = [];
+  for (let i = 7; i >= 0; i--) {
+    groups.push(Number((big >> BigInt(i * 16)) & 0xffffn));
+  }
+  return groups;
+}
+
+function expandIPv6(big) {
+  return bigIntToIPv6Groups(big).map(g => g.toString(16).padStart(4, '0')).join(':');
+}
+
+function compressIPv6(big) {
+  const groups = bigIntToIPv6Groups(big).map(g => g.toString(16));
+  // Trouve la plus longue série de groupes "0" consécutifs (RFC 5952) pour la remplacer par "::"
+  let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+  for (let i = 0; i < 8; i++) {
+    if (groups[i] === '0') {
+      if (curStart === -1) curStart = i;
+      curLen++;
+      if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+    } else {
+      curStart = -1; curLen = 0;
+    }
+  }
+  if (bestLen < 2) return groups.join(':');
+  const before = groups.slice(0, bestStart).join(':');
+  const after = groups.slice(bestStart + bestLen).join(':');
+  return `${before}::${after}`;
+}
+
+function classifyIPv6(big) {
+  if (big === 0n) return 'Non spécifiée (::)';
+  if (big === 1n) return 'Loopback (::1)';
+  const top16 = big >> 112n;
+  const top8 = big >> 120n;
+  const top10 = big >> 118n;
+  const top7 = big >> 121n;
+  if (top16 === 0x2001n && ((big >> 96n) & 0xffffn) === 0x0db8n) return 'Documentation (RFC 3849, réservée pour exemples)';
+  if (top8 === 0xffn) return 'Multicast (ff00::/8)';
+  if (top10 === 0x3fan) return 'Link-local (fe80::/10)'; // 0xfe80 >> 6 == 0x3fa
+  if (top7 === 0x7en) return 'Unique local / ULA (fc00::/7, adressage privé)'; // 0xfc >> 1 == 0x7e
+  if (top16 === 0x2002n) return '6to4 (2002::/16)';
+  return 'Unicast global';
+}
+
+const v6CalcBtn = document.getElementById('v6-calc-btn');
+const v6Input = document.getElementById('v6-input');
+const v6Error = document.getElementById('v6-error');
+const v6Results = document.getElementById('v6-results');
+const v6SubnetsBox = document.getElementById('v6-subnets-box');
+
+v6CalcBtn.addEventListener('click', () => {
+  v6Error.classList.add('hidden');
+  v6Results.classList.add('hidden');
+  v6SubnetsBox.classList.add('hidden');
+  try {
+    const raw = v6Input.value.trim();
+    const match = raw.match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/);
+    if (!match) throw new Error("Format attendu : adresse/préfixe, ex. 2001:db8:acad::/48");
+    const prefixLen = parseInt(match[2], 10);
+    if (prefixLen < 0 || prefixLen > 128) throw new Error("Préfixe hors plage (0-128)");
+    const big = parseIPv6ToBigInt(match[1]);
+    if (big === null) throw new Error("Adresse IPv6 invalide");
+
+    const maskBig = prefixLen === 0 ? 0n : (((1n << 128n) - 1n) << BigInt(128 - prefixLen)) & ((1n << 128n) - 1n);
+    const networkBig = big & maskBig;
+
+    document.getElementById('v6-compressed').textContent = compressIPv6(big);
+    document.getElementById('v6-expanded').textContent = expandIPv6(big);
+    document.getElementById('v6-network').textContent = `${compressIPv6(networkBig)}/${prefixLen}`;
+    document.getElementById('v6-type').textContent = classifyIPv6(big);
+
+    const v6SubnetsTableBody = document.querySelector('#v6-subnets-table tbody');
+    if (prefixLen <= 64) {
+      const subnetBits = 64 - prefixLen;
+      const totalSubnets = subnetBits >= 53 ? Infinity : Math.pow(2, subnetBits); // au-delà, trop grand pour un Number JS fiable
+      document.getElementById('v6-subnets-count').textContent = totalSubnets === Infinity
+        ? `${2n ** BigInt(subnetBits)}`.length > 15 ? 'astronomique (> 10^15)' : String(totalSubnets)
+        : totalSubnets.toLocaleString('fr-FR');
+
+      const maxShow = 8;
+      const showCount = subnetBits >= 53 ? maxShow : Math.min(maxShow, Math.pow(2, subnetBits));
+      let rows = '';
+      for (let i = 0; i < showCount; i++) {
+        const subnetBig = networkBig | (BigInt(i) << 64n);
+        rows += `<tr><td>${i + 1}</td><td>${compressIPv6(subnetBig)}/64</td></tr>`;
+      }
+      v6SubnetsTableBody.innerHTML = rows;
+      v6SubnetsBox.classList.remove('hidden');
+    } else {
+      document.getElementById('v6-subnets-count').textContent = 'préfixe déjà plus spécifique que /64';
+    }
+
+    v6Results.classList.remove('hidden');
+  } catch (e) {
+    v6Error.textContent = e.message;
+    v6Error.classList.remove('hidden');
+  }
+});
+
 // ---- Aide-mémoire CIDR (drawer) ----
 const cidrDrawer = document.getElementById('cidr-drawer');
 const drawerOverlay = document.getElementById('drawer-overlay');
@@ -768,6 +1000,9 @@ const newPortDesc = document.getElementById('new-port-desc');
 const newPortVoice = document.getElementById('new-port-voice');
 const newPortNative = document.getElementById('new-port-native');
 const newPortSecurity = document.getElementById('new-port-security');
+const newPortTrust = document.getElementById('new-port-trust');
+const newPortStorm = document.getElementById('new-port-storm');
+const vlanDhcpSnooping = document.getElementById('vlan-dhcp-snooping');
 const advancedRow = document.getElementById('advanced-row');
 const advVoiceField = document.getElementById('adv-voice-field');
 const advNativeField = document.getElementById('adv-native-field');
@@ -776,7 +1011,7 @@ const advSecurityField = document.getElementById('adv-security-field');
 document.getElementById('advanced-toggle').addEventListener('click', (e) => {
   advancedRow.classList.toggle('hidden');
   e.target.textContent = advancedRow.classList.contains('hidden')
-    ? '+ Options avancées (description, VLAN voix, natif, port-security)'
+    ? '+ Options avancées (description, VLAN voix, natif, port-security, DHCP snooping, storm-control)'
     : '− Masquer les options avancées';
 });
 
@@ -861,6 +1096,8 @@ function renderPortRows() {
     if (p.mode === 'access' && p.voiceVlanId) extras.push(`voix VLAN ${p.voiceVlanId}`);
     if (p.mode === 'trunk' && p.nativeVlanId) extras.push(`natif VLAN ${p.nativeVlanId}`);
     if (p.mode === 'access' && p.security) extras.push('port-security');
+    if (p.trust) extras.push('trust DHCP snooping');
+    if (p.storm) extras.push(`storm-control ${p.storm}%`);
 
     return `
       <div class="port-row">
@@ -888,6 +1125,7 @@ document.getElementById('add-vlan-btn').addEventListener('click', () => {
 newVlanSvi.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('add-vlan-btn').click(); });
 
 newPortMode.addEventListener('change', updateAdvancedFieldsVisibility);
+vlanDhcpSnooping.addEventListener('change', saveState);
 
 function expandPortRange(input) {
   const match = input.match(/^(.+?)(\d+)-(\d+)$/);
@@ -913,6 +1151,9 @@ document.getElementById('add-port-btn').addEventListener('click', () => {
   const voiceVlanId = mode === 'access' ? (newPortVoice.value || null) : null;
   const nativeVlanId = mode === 'trunk' ? (newPortNative.value || null) : null;
   const security = mode === 'access' ? newPortSecurity.checked : false;
+  const trust = newPortTrust.checked;
+  const stormRaw = newPortStorm.value.trim();
+  const storm = stormRaw && !isNaN(parseFloat(stormRaw)) ? stormRaw : null;
 
   const ports = expandPortRange(newPortType.value + num).filter(p => !portState.some(existing => existing.port === p));
 
@@ -920,13 +1161,15 @@ document.getElementById('add-port-btn').addEventListener('click', () => {
     portState.push({
       port, mode,
       vlanId: mode === 'access' ? newPortVlan.value : null,
-      voiceVlanId, nativeVlanId, description, security
+      voiceVlanId, nativeVlanId, description, security, trust, storm
     });
   });
 
   newPortName.value = '';
   newPortDesc.value = '';
   newPortSecurity.checked = false;
+  newPortTrust.checked = false;
+  newPortStorm.value = '';
   newPortName.focus();
   renderPortRows();
 });
@@ -956,6 +1199,15 @@ function generateVlanConfig() {
     lines.push(`vlan ${v.id}`);
     lines.push(` name ${v.name}`);
   });
+
+  const dhcpSnoopingEnabled = vlanDhcpSnooping.checked;
+  if (dhcpSnoopingEnabled) {
+    lines.push('!');
+    lines.push('! --- DHCP snooping (protection contre les serveurs DHCP non autorisés) ---');
+    lines.push('ip dhcp snooping');
+    lines.push(`ip dhcp snooping vlan ${vlanState.map(v => v.id).join(',')}`);
+    lines.push('no ip dhcp snooping information option');
+  }
 
   const svisConfigured = vlanState.filter(v => v.svi);
   if (svisConfigured.length > 0) {
@@ -990,6 +1242,8 @@ function generateVlanConfig() {
         lines.push(' switchport port-security violation restrict');
         lines.push(' switchport port-security mac-address sticky');
       }
+      if (dhcpSnoopingEnabled && p.trust) lines.push(' ip dhcp snooping trust');
+      if (p.storm) lines.push(` storm-control broadcast level ${p.storm}`);
       lines.push('!');
     });
   }
@@ -1003,6 +1257,8 @@ function generateVlanConfig() {
       lines.push(' switchport mode trunk');
       lines.push(` switchport trunk allowed vlan ${vlanState.map(v => v.id).join(',')}`);
       if (p.nativeVlanId) lines.push(` switchport trunk native vlan ${p.nativeVlanId}`);
+      if (dhcpSnoopingEnabled && p.trust) lines.push(' ip dhcp snooping trust');
+      if (p.storm) lines.push(` storm-control broadcast level ${p.storm}`);
       lines.push('!');
     });
   }
@@ -1058,6 +1314,7 @@ const devicePorts = {};       // deviceId -> [{port, mode, vlanId, voiceVlanId, 
 const deviceInterfaces = {};  // deviceId -> [{name, sub, vlanId, ip, cidr, description}]
 const deviceRoutes = {};      // deviceId -> [{network, cidr, nextHop}]
 const deviceOspf = {};         // deviceId -> {enabled, pid, area}
+const deviceBgp = {};           // deviceId -> {enabled, asNumber, networks: [], neighbors: [{ip, remoteAs}]}
 const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, staticMappings}
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
@@ -1293,6 +1550,7 @@ document.getElementById('load-preset-btn').addEventListener('click', () => {
   deviceRoutes.dev4 = [];
 
   deviceOspf.dev1 = { enabled: false, pid: '1', area: '0' };
+  deviceBgp.dev1 = { enabled: false, asNumber: '', networks: [], neighbors: [] };
 
   links = [
     { a: 'dev1', b: 'dev2', label: 'Gi0/1 ↔ Gi0/1, trunk' },
@@ -1316,6 +1574,7 @@ document.getElementById('reset-topology-btn').addEventListener('click', () => {
   Object.keys(deviceInterfaces).forEach(k => delete deviceInterfaces[k]);
   Object.keys(deviceRoutes).forEach(k => delete deviceRoutes[k]);
   Object.keys(deviceOspf).forEach(k => delete deviceOspf[k]);
+  Object.keys(deviceBgp).forEach(k => delete deviceBgp[k]);
   links = [];
   selectedDeviceId = null;
   deviceIdSeq = 1;
@@ -1354,6 +1613,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceInterfaces[id] = [];
   deviceRoutes[id] = [];
   deviceOspf[id] = { enabled: false, pid: '1', area: '0' };
+  deviceBgp[id] = { enabled: false, asNumber: '', networks: [], neighbors: [] };
   deviceNat[id] = { patEnabled: false, outsideIface: '', staticMappings: [] };
   deviceEtherchannels[id] = [];
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
@@ -1385,6 +1645,7 @@ document.addEventListener('click', (e) => {
     delete deviceInterfaces[id];
     delete deviceRoutes[id];
     delete deviceOspf[id];
+    delete deviceBgp[id];
     delete deviceNat[id];
     delete deviceEtherchannels[id];
     delete deviceVtp[id];
@@ -1863,7 +2124,52 @@ function renderDeviceConfigPanel() {
           </div>
           <button class="btn-add" id="dev-ospf-save-btn">Enregistrer</button>
         </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-ospf-redist-bgp"> Redistribuer les routes BGP dans OSPF (utile si le routeur fait aussi de la sortie eBGP)
+          </label>
+        </div>
         <div class="hint" id="dev-ospf-hint"></div>
+
+        <div class="subsection-label">Routage dynamique (BGP, eBGP simple)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Activer BGP ?</label>
+            <select id="dev-bgp-enabled">
+              <option value="no">Non</option>
+              <option value="yes">Oui</option>
+            </select>
+          </div>
+          <div class="mini-field">
+            <label>AS local</label>
+            <input type="text" id="dev-bgp-as" placeholder="65001">
+          </div>
+        </div>
+        <div class="builder-row">
+          <div class="mini-field grow">
+            <label>Réseaux à annoncer (un par ligne, ex: 192.168.10.0/24)</label>
+            <input type="text" id="dev-bgp-networks" placeholder="192.168.10.0/24, 192.168.20.0/24">
+          </div>
+        </div>
+        <div class="builder-row">
+          <div class="mini-field grow">
+            <label>IP voisin (eBGP)</label>
+            <input type="text" id="dev-bgp-neighbor-ip" placeholder="203.0.113.2">
+          </div>
+          <div class="mini-field">
+            <label>AS distant</label>
+            <input type="text" id="dev-bgp-neighbor-as" placeholder="65002">
+          </div>
+          <button class="btn-add" id="dev-bgp-add-neighbor-btn">+ Ajouter voisin</button>
+        </div>
+        <div class="port-rows" id="dev-bgp-neighbor-rows"></div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-bgp-redist-ospf"> Redistribuer les routes OSPF dans BGP (annoncer le réseau interne vers l'extérieur)
+          </label>
+        </div>
+        <button class="btn-add" id="dev-bgp-save-btn">Enregistrer</button>
+        <div class="hint" id="dev-bgp-hint"></div>
 
         <div class="subsection-label">NAT / PAT</div>
         <div class="builder-row">
@@ -1892,7 +2198,36 @@ function renderDeviceConfigPanel() {
             <label>IP publique (globale)</label>
             <input type="text" id="dev-nat-global" placeholder="203.0.113.10">
           </div>
-          <button class="btn-add" id="dev-nat-add-static-btn">+ Ajouter</button>
+          <button class="btn-add" id="dev-nat-add-static-btn">+ Ajouter (1:1 complet)</button>
+        </div>
+        <div class="hint">Astuce : pour rediriger un seul service (ex: un serveur web derrière une IP publique partagée), utilise plutôt la redirection de port ci-dessous.</div>
+
+        <div class="builder-label" style="margin-top:16px;">Redirection de port (PAT statique / port forwarding)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Protocole</label>
+            <select id="dev-natpt-proto">
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </div>
+          <div class="mini-field grow">
+            <label>IP locale (LAN)</label>
+            <input type="text" id="dev-natpt-local" placeholder="192.168.10.10">
+          </div>
+          <div class="mini-field">
+            <label>Port local</label>
+            <input type="text" id="dev-natpt-local-port" placeholder="80">
+          </div>
+          <div class="mini-field grow">
+            <label>IP publique (globale)</label>
+            <input type="text" id="dev-natpt-global" placeholder="203.0.113.10">
+          </div>
+          <div class="mini-field">
+            <label>Port public</label>
+            <input type="text" id="dev-natpt-global-port" placeholder="8080">
+          </div>
+          <button class="btn-add" id="dev-natpt-add-btn">+ Ajouter</button>
         </div>
         <div class="port-rows" id="dev-nat-static-rows"></div>
 
@@ -2106,10 +2441,11 @@ function renderDeviceConfigPanel() {
     renderDevIfRows();
     renderDevRouteRows();
 
-    const ospf = deviceOspf[selectedDeviceId] || { enabled: false, pid: '1', area: '0' };
+    const ospf = deviceOspf[selectedDeviceId] || { enabled: false, pid: '1', area: '0', redistBgp: false };
     document.getElementById('dev-ospf-enabled').value = ospf.enabled ? 'yes' : 'no';
     document.getElementById('dev-ospf-pid').value = ospf.pid;
     document.getElementById('dev-ospf-area').value = ospf.area;
+    document.getElementById('dev-ospf-redist-bgp').checked = !!ospf.redistBgp;
     document.getElementById('dev-ospf-hint').textContent = ospf.enabled
       ? `OSPF actif — les réseaux de toutes les interfaces IP configurées seront annoncés en zone ${ospf.area}`
       : '';
@@ -2118,7 +2454,66 @@ function renderDeviceConfigPanel() {
       deviceOspf[selectedDeviceId] = {
         enabled: document.getElementById('dev-ospf-enabled').value === 'yes',
         pid: document.getElementById('dev-ospf-pid').value.trim() || '1',
-        area: document.getElementById('dev-ospf-area').value.trim() || '0'
+        area: document.getElementById('dev-ospf-area').value.trim() || '0',
+        redistBgp: document.getElementById('dev-ospf-redist-bgp').checked
+      };
+      renderDeviceConfigPanel();
+    });
+
+    // ---- BGP ----
+    const bgp = deviceBgp[selectedDeviceId] || { enabled: false, asNumber: '', networks: [], neighbors: [], redistOspf: false };
+    document.getElementById('dev-bgp-enabled').value = bgp.enabled ? 'yes' : 'no';
+    document.getElementById('dev-bgp-as').value = bgp.asNumber || '';
+    document.getElementById('dev-bgp-networks').value = (bgp.networks || []).join(', ');
+    document.getElementById('dev-bgp-redist-ospf').checked = !!bgp.redistOspf;
+    document.getElementById('dev-bgp-hint').textContent = bgp.enabled
+      ? `BGP actif (AS ${bgp.asNumber || '?'}) — ${(bgp.neighbors || []).length} voisin(s) configuré(s)`
+      : '';
+
+    function renderBgpNeighborRows() {
+      const rows = document.getElementById('dev-bgp-neighbor-rows');
+      const list = (deviceBgp[selectedDeviceId] || {}).neighbors || [];
+      if (list.length === 0) {
+        rows.innerHTML = '<span class="empty-hint">Aucun voisin BGP pour l\'instant</span>';
+        return;
+      }
+      rows.innerHTML = list.map((n, idx) => `
+        <div class="port-row">
+          <span class="port-detail">${n.ip} — AS distant ${n.remoteAs}</span>
+          <button class="chip-remove" data-remove-bgp-neighbor="${idx}" title="Retirer">&times;</button>
+        </div>
+      `).join('');
+    }
+    renderBgpNeighborRows();
+
+    document.getElementById('dev-bgp-add-neighbor-btn').addEventListener('click', () => {
+      const ip = document.getElementById('dev-bgp-neighbor-ip').value.trim();
+      const remoteAs = document.getElementById('dev-bgp-neighbor-as').value.trim();
+      if (!ip || !remoteAs || ipToInt(ip) === null) return;
+      if (!deviceBgp[selectedDeviceId]) deviceBgp[selectedDeviceId] = { enabled: false, asNumber: '', networks: [], neighbors: [] };
+      deviceBgp[selectedDeviceId].neighbors.push({ ip, remoteAs });
+      document.getElementById('dev-bgp-neighbor-ip').value = '';
+      document.getElementById('dev-bgp-neighbor-as').value = '';
+      renderBgpNeighborRows();
+      saveState();
+    });
+
+    document.getElementById('dev-bgp-neighbor-rows').addEventListener('click', (e) => {
+      if (e.target.dataset.removeBgpNeighbor === undefined) return;
+      deviceBgp[selectedDeviceId].neighbors.splice(parseInt(e.target.dataset.removeBgpNeighbor, 10), 1);
+      renderBgpNeighborRows();
+      saveState();
+    });
+
+    document.getElementById('dev-bgp-save-btn').addEventListener('click', () => {
+      const existing = deviceBgp[selectedDeviceId] || { neighbors: [] };
+      const networksRaw = document.getElementById('dev-bgp-networks').value;
+      deviceBgp[selectedDeviceId] = {
+        enabled: document.getElementById('dev-bgp-enabled').value === 'yes',
+        asNumber: document.getElementById('dev-bgp-as').value.trim(),
+        networks: networksRaw.split(',').map(s => s.trim()).filter(Boolean),
+        neighbors: existing.neighbors || [],
+        redistOspf: document.getElementById('dev-bgp-redist-ospf').checked
       };
       renderDeviceConfigPanel();
     });
@@ -2143,13 +2538,17 @@ function renderDeviceConfigPanel() {
         box.innerHTML = '<span class="empty-hint">Aucun mapping statique pour l\'instant</span>';
         return;
       }
-      box.innerHTML = mappings.map((m, idx) => `
+      box.innerHTML = mappings.map((m, idx) => {
+        const detail = m.proto
+          ? `${m.proto.toUpperCase()} ${m.localIp}:${m.localPort} → ${m.globalIp}:${m.globalPort}`
+          : `${m.localIp} → ${m.globalIp} (1:1 complet)`;
+        return `
         <div class="port-row">
-          <span class="port-name">${m.localIp}</span>
-          <span class="port-detail">→ ${m.globalIp}</span>
+          <span class="port-detail">${detail}</span>
           <button class="chip-remove" data-remove-nat-static="${idx}" title="Retirer">&times;</button>
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
     renderNatStaticRows();
 
@@ -2174,6 +2573,27 @@ function renderDeviceConfigPanel() {
       deviceNat[selectedDeviceId].staticMappings.push({ localIp, globalIp });
       document.getElementById('dev-nat-local').value = '';
       document.getElementById('dev-nat-global').value = '';
+      renderNatStaticRows();
+      saveState();
+    });
+
+    document.getElementById('dev-natpt-add-btn').addEventListener('click', () => {
+      const proto = document.getElementById('dev-natpt-proto').value;
+      const localIp = document.getElementById('dev-natpt-local').value.trim();
+      const localPort = document.getElementById('dev-natpt-local-port').value.trim();
+      const globalIp = document.getElementById('dev-natpt-global').value.trim();
+      const globalPort = document.getElementById('dev-natpt-global-port').value.trim();
+      if (ipToInt(localIp) === null || ipToInt(globalIp) === null) return;
+      if (!localPort || !globalPort || isNaN(parseInt(localPort, 10)) || isNaN(parseInt(globalPort, 10))) return;
+
+      if (!deviceNat[selectedDeviceId]) {
+        deviceNat[selectedDeviceId] = { patEnabled: false, outsideIface: '', staticMappings: [] };
+      }
+      deviceNat[selectedDeviceId].staticMappings.push({ proto, localIp, localPort, globalIp, globalPort });
+      document.getElementById('dev-natpt-local').value = '';
+      document.getElementById('dev-natpt-local-port').value = '';
+      document.getElementById('dev-natpt-global').value = '';
+      document.getElementById('dev-natpt-global-port').value = '';
       renderNatStaticRows();
       saveState();
     });
@@ -2600,7 +3020,11 @@ function generateRouterDeviceConfig(device) {
 
     if (nat.staticMappings && nat.staticMappings.length > 0) {
       nat.staticMappings.forEach(m => {
-        lines.push(`ip nat inside source static ${m.localIp} ${m.globalIp}`);
+        if (m.proto) {
+          lines.push(`ip nat inside source static ${m.proto} ${m.localIp} ${m.localPort} ${m.globalIp} ${m.globalPort}`);
+        } else {
+          lines.push(`ip nat inside source static ${m.localIp} ${m.globalIp}`);
+        }
       });
       lines.push('!');
     }
@@ -2667,8 +3091,32 @@ function generateRouterDeviceConfig(device) {
         const wildcard = intToIp((~maskInt) >>> 0);
         lines.push(` network ${networkAddr} ${wildcard} area ${ospf.area}`);
       });
+      const bgpForRedist = deviceBgp[device.id];
+      if (ospf.redistBgp && bgpForRedist && bgpForRedist.enabled && bgpForRedist.asNumber) {
+        lines.push(` redistribute bgp ${bgpForRedist.asNumber} subnets`);
+      }
       lines.push('!');
     }
+  }
+
+  const bgp = deviceBgp[device.id];
+  if (bgp && bgp.enabled && bgp.asNumber) {
+    lines.push('! --- BGP (eBGP) ---');
+    lines.push(`router bgp ${bgp.asNumber}`);
+    (bgp.networks || []).forEach(net => {
+      const match = net.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
+      if (!match) return;
+      const cidr = parseInt(match[2], 10);
+      const mask = intToIp(maskFromCidr(cidr));
+      lines.push(` network ${match[1]} mask ${mask}`);
+    });
+    (bgp.neighbors || []).forEach(n => {
+      lines.push(` neighbor ${n.ip} remote-as ${n.remoteAs}`);
+    });
+    if (bgp.redistOspf && ospf && ospf.enabled) {
+      lines.push(` redistribute ospf ${ospf.pid}`);
+    }
+    lines.push('!');
   }
 
   lines.push('end');
@@ -2764,6 +3212,7 @@ function generateDeviceConfig(device) {
 }
 const topologyError = document.getElementById('topology-error');
 const topologyResults = document.getElementById('topology-results');
+const topologyGenerateBtn = document.getElementById('topology-generate-btn');
 let lastTopologyOutputs = [];
 
 // ==================================================================
@@ -2996,6 +3445,7 @@ try {
     if (savedState.deviceInterfaces) Object.assign(deviceInterfaces, savedState.deviceInterfaces);
     if (savedState.deviceRoutes) Object.assign(deviceRoutes, savedState.deviceRoutes);
     if (savedState.deviceOspf) Object.assign(deviceOspf, savedState.deviceOspf);
+    if (savedState.deviceBgp) Object.assign(deviceBgp, savedState.deviceBgp);
     if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
     if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
     if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);
@@ -3011,6 +3461,10 @@ try {
     const fwPolicySelect = document.getElementById('fw-policy');
     if (fwPolicySelect) fwPolicySelect.value = savedState.fwPolicy;
   }
+  if (savedState && savedState.fwFormat) {
+    const fwFormatSelect = document.getElementById('fw-format');
+    if (fwFormatSelect) fwFormatSelect.value = savedState.fwFormat;
+  }
   if (savedState && savedState.dnsRecords) dnsRecords = savedState.dnsRecords;
   if (savedState && savedState.networkGroups) networkGroups = savedState.networkGroups;
   if (savedState && savedState.serviceGroups) serviceGroups = savedState.serviceGroups;
@@ -3021,7 +3475,14 @@ try {
     if (zoneEl && savedState.dnsZoneName) zoneEl.value = savedState.dnsZoneName;
     if (nsEl && savedState.dnsPrimaryNs) nsEl.value = savedState.dnsPrimaryNs;
     if (emailEl && savedState.dnsAdminEmail) emailEl.value = savedState.dnsAdminEmail;
+    const dhcpSnoopEl = document.getElementById('vlan-dhcp-snooping');
+    if (dhcpSnoopEl && savedState.vlanDhcpSnooping) dhcpSnoopEl.checked = true;
+    const fwReflexiveEl = document.getElementById('fw-reflexive');
+    if (fwReflexiveEl && savedState.fwReflexive) fwReflexiveEl.checked = true;
+    const fwIpv6El = document.getElementById('fw-ipv6');
+    if (fwIpv6El && savedState.fwIpv6) fwIpv6El.checked = true;
   }
+  if (typeof updateFwFormatFieldsVisibility === 'function') updateFwFormatFieldsVisibility();
 } catch (e) {
   console.warn('NetForge : application partielle de l\'état du projet', e);
   showIntegrityNotice(['(application de l\'état)']);
@@ -3040,10 +3501,12 @@ renderLinkRows();
 const fwRuleRows = document.getElementById('fw-rule-rows');
 const fwRuleProto = document.getElementById('fw-rule-proto');
 const fwRulePortField = document.getElementById('fw-rule-port-field');
+const fwRuleIcmpField = document.getElementById('fw-rule-icmp-field');
 
 function updateFwPortFieldVisibility() {
   const proto = fwRuleProto.value;
   fwRulePortField.style.display = (proto === 'icmp' || proto === 'any') ? 'none' : 'flex';
+  fwRuleIcmpField.style.display = proto === 'icmp' ? 'flex' : 'none';
 }
 fwRuleProto.addEventListener('change', updateFwPortFieldVisibility);
 updateFwPortFieldVisibility();
@@ -3160,12 +3623,14 @@ function renderFwRuleRows() {
   }
   fwRuleRows.innerHTML = fwRules.map((r, idx) => {
     const isSvcGroup = r.port && r.port.startsWith('SVCOG:');
-    const protoPortPart = isSvcGroup ? ` groupe ${r.port.slice(6)}` : `${r.proto.toUpperCase()}${r.port ? ' port ' + r.port : ''}`;
+    const protoPortPart = isSvcGroup ? ` groupe ${r.port.slice(6)}` : `${r.proto.toUpperCase()}${r.port ? ' port ' + r.port : ''}${r.icmpType ? ' type ' + r.icmpType : ''}`;
     const logPart = r.log ? ` <span class="port-detail-extra">[log]</span>` : '';
+    const trPart = r.timeRange ? ` <span class="port-detail-extra">[⏱ ${r.timeRange}]</span>` : '';
+    const rlPart = r.rateLimit ? ` <span class="port-detail-extra">[⚡ ${r.rateLimit}]</span>` : '';
     return `
       <div class="port-row">
         <span class="port-badge ${r.action === 'ACCEPT' ? 'access' : 'trunk'}">${r.action}</span>
-        <span class="port-detail">${protoPortPart} — ${formatFwEndpoint(r.source)} → ${formatFwEndpoint(r.dest)}${logPart}</span>
+        <span class="port-detail">${protoPortPart} — ${formatFwEndpoint(r.source)} → ${formatFwEndpoint(r.dest)}${logPart}${trPart}${rlPart}</span>
         <button class="chip-remove" data-fw-move-up="${idx}" title="Monter" ${idx === 0 ? 'style="opacity:0.3;pointer-events:none;"' : ''}>↑</button>
         <button class="chip-remove" data-fw-move-down="${idx}" title="Descendre" ${idx === fwRules.length - 1 ? 'style="opacity:0.3;pointer-events:none;"' : ''}>↓</button>
         <button class="chip-remove" data-remove-fw-rule="${idx}" title="Retirer">&times;</button>
@@ -3179,9 +3644,12 @@ document.getElementById('fw-add-rule-btn').addEventListener('click', () => {
   const action = document.getElementById('fw-rule-action').value;
   let proto = fwRuleProto.value;
   let port = (proto === 'icmp' || proto === 'any') ? '' : document.getElementById('fw-rule-port').value.trim();
+  const icmpType = proto === 'icmp' ? document.getElementById('fw-rule-icmptype').value : '';
   let source = document.getElementById('fw-rule-source').value.trim() || 'any';
   let dest = document.getElementById('fw-rule-dest').value.trim() || 'any';
   const log = document.getElementById('fw-rule-log').checked;
+  const timeRange = document.getElementById('fw-rule-timerange').value.trim();
+  const rateLimit = document.getElementById('fw-rule-ratelimit').value.trim();
 
   const srcGroup = document.getElementById('fw-rule-src-group').value;
   const dstGroup = document.getElementById('fw-rule-dst-group').value;
@@ -3191,11 +3659,13 @@ document.getElementById('fw-add-rule-btn').addEventListener('click', () => {
   if (dstGroup) dest = `OG:${dstGroup}`;
   if (svcGroup) { proto = 'any'; port = `SVCOG:${svcGroup}`; }
 
-  fwRules.push({ action, proto, port, source, dest, log });
+  fwRules.push({ action, proto, port, source, dest, log, timeRange, rateLimit, icmpType });
   document.getElementById('fw-rule-port').value = '';
   document.getElementById('fw-rule-source').value = 'any';
   document.getElementById('fw-rule-dest').value = 'any';
   document.getElementById('fw-rule-log').checked = false;
+  document.getElementById('fw-rule-timerange').value = '';
+  document.getElementById('fw-rule-ratelimit').value = '';
   document.getElementById('fw-rule-src-group').value = '';
   document.getElementById('fw-rule-dst-group').value = '';
   document.getElementById('fw-rule-svc-group').value = '';
@@ -3259,6 +3729,38 @@ function resolveServiceGroupMembers(rule) {
   return [{ proto: rule.proto, port: rule.port }];
 }
 
+// ---- Analyse des champs plage horaire / limite de débit ----
+function parseTimeRange(str) {
+  if (!str) return null;
+  const match = str.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+  if (!match) return null;
+  return { start: match[1], end: match[2], raw: str };
+}
+
+function parseRateLimit(str) {
+  if (!str) return null;
+  const match = str.match(/^(\d+)\s*\/\s*(sec|second|min|minute|hour|heure)/i);
+  if (!match) return null;
+  const unitMap = { sec: 'second', second: 'second', min: 'minute', minute: 'minute', hour: 'hour', heure: 'hour' };
+  const unit = unitMap[match[2].toLowerCase()] || 'second';
+  return { count: match[1], unit, raw: str };
+}
+
+const icmpTypeIptables = {
+  'echo-request': 'echo-request',
+  'echo-reply': 'echo-reply',
+  'time-exceeded': 'time-exceeded',
+  'unreachable': 'destination-unreachable',
+  'redirect': 'redirect'
+};
+const icmpTypeCisco = {
+  'echo-request': 'echo',
+  'echo-reply': 'echo-reply',
+  'time-exceeded': 'time-exceeded',
+  'unreachable': 'unreachable',
+  'redirect': 'redirect'
+};
+
 function generateIptablesConfig(policy, rules) {
   const validPolicies = ['ACCEPT', 'DROP', 'REJECT'];
   policy = policy.trim().toUpperCase();
@@ -3287,14 +3789,21 @@ function generateIptablesConfig(policy, rules) {
     const sources = resolveNetworkGroupMembers(r.source);
     const dests = resolveNetworkGroupMembers(r.dest);
     const svcs = resolveServiceGroupMembers(r);
+    const timeRange = parseTimeRange(r.timeRange);
+    const rateLimit = parseRateLimit(r.rateLimit);
+    if (r.timeRange && !timeRange) lines.push(`# ⚠ Plage horaire "${r.timeRange}" non reconnue (format attendu HH:MM-HH:MM) — ignorée`);
+    if (r.rateLimit && !rateLimit) lines.push(`# ⚠ Limite de débit "${r.rateLimit}" non reconnue (format attendu ex. 100/sec) — ignorée`);
 
     sources.forEach(source => {
       dests.forEach(dest => {
         svcs.forEach(svc => {
           let base = `-p ${svc.proto}`;
           if (svc.port) base += ` --dport ${svc.port}`;
+          if (svc.proto === 'icmp' && r.icmpType && icmpTypeIptables[r.icmpType]) base += ` --icmp-type ${icmpTypeIptables[r.icmpType]}`;
           if (source && source.toLowerCase() !== 'any') base += ` -s ${source}`;
           if (dest && dest.toLowerCase() !== 'any') base += ` -d ${dest}`;
+          if (timeRange) base += ` -m time --timestart ${timeRange.start}:00 --timestop ${timeRange.end}:00`;
+          if (rateLimit) base += ` -m limit --limit ${rateLimit.count}/${rateLimit.unit} --limit-burst ${Math.max(5, parseInt(rateLimit.count, 10))}`;
 
           if (r.log) {
             lines.push(`iptables -A INPUT ${base} -j LOG --log-prefix "NETFORGE-R${idx + 1}: "`);
@@ -3325,13 +3834,25 @@ function ciscoAddrFormat(value) {
   return `host ${value}`;
 }
 
-function generateCiscoAclConfig(policy, rules) {
+// Les ACL IPv6 Cisco n'utilisent pas de masque générique : le préfixe s'exprime directement en "adresse/longueur".
+function ciscoAddrFormatV6(value) {
+  if (!value || value.toLowerCase() === 'any') return 'any';
+  if (value.startsWith('OG:')) return `object-group ${value.slice(3)}`;
+  if (value.includes('/')) return value; // déjà au format préfixe/longueur
+  return `host ${value}`;
+}
+
+function generateCiscoAclConfig(policy, rules, reflexive, ipv6) {
   if (rules.length === 0) throw new Error("Ajoute au moins une règle avant de générer");
+  const addrFormat = ipv6 ? ciscoAddrFormatV6 : ciscoAddrFormat;
+  const aclKeyword = ipv6 ? 'ipv6 access-list' : 'ip access-list extended';
+  const aclName = ipv6 ? 'NETFORGE_ACL6' : 'NETFORGE_ACL';
+  const applyKeyword = ipv6 ? 'ipv6 traffic-filter' : 'ip access-group';
 
   const lines = [];
   lines.push('! === ACL Cisco générée par NetForge ===');
 
-  if (networkGroups.length > 0) {
+  if (networkGroups.length > 0 && !ipv6) {
     lines.push('! --- Object-groups réseau ---');
     networkGroups.forEach(g => {
       lines.push(`object-group network ${g.name}`);
@@ -3347,6 +3868,8 @@ function generateCiscoAclConfig(policy, rules) {
       });
     });
     lines.push('!');
+  } else if (networkGroups.length > 0 && ipv6) {
+    lines.push('! --- Object-groups réseau ignorés en mode IPv6 (définis en adressage IPv4, non applicables ici) ---');
   }
 
   if (serviceGroups.length > 0) {
@@ -3358,37 +3881,121 @@ function generateCiscoAclConfig(policy, rules) {
     lines.push('!');
   }
 
-  lines.push('ip access-list extended NETFORGE_ACL');
+  // Génère un objet time-range par règle qui en a un ; réutilisable indépendamment de l'ACL elle-même.
+  const timeRangeNames = {};
+  rules.forEach((r, idx) => {
+    const tr = parseTimeRange(r.timeRange);
+    if (!tr) return;
+    const name = `TR_RULE${idx + 1}`;
+    timeRangeNames[idx] = name;
+  });
+  if (Object.keys(timeRangeNames).length > 0) {
+    lines.push('! --- Plages horaires (time-range) ---');
+    rules.forEach((r, idx) => {
+      const tr = parseTimeRange(r.timeRange);
+      if (!tr) return;
+      lines.push(`time-range ${timeRangeNames[idx]}`);
+      lines.push(` periodic weekdays ${tr.start} to ${tr.end}`);
+    });
+    lines.push('!');
+  }
 
-  rules.forEach((r) => {
+  lines.push(`${aclKeyword} ${aclName}`);
+
+  const reflexiveEligible = reflexive
+    ? rules.filter(r => r.action === 'ACCEPT' && (r.proto === 'tcp' || r.proto === 'udp') && !(r.port && r.port.startsWith('SVCOG:')))
+    : [];
+  if (reflexiveEligible.length > 0) {
+    lines.push(' evaluate NETFORGE_REFLECT');
+  }
+
+  rules.forEach((r, idx) => {
     const action = r.action === 'ACCEPT' ? 'permit' : 'deny';
-    const src = ciscoAddrFormat(r.source);
-    const dst = ciscoAddrFormat(r.dest);
+    if (ipv6 && (r.source.startsWith('OG:') || r.dest.startsWith('OG:'))) {
+      lines.push(` ! ⚠ règle ${idx + 1} ignorée : utilise un object-group réseau, non disponible en mode IPv6 ici`);
+      return;
+    }
+    const src = addrFormat(r.source);
+    const dst = addrFormat(r.dest);
+    const trSuffix = timeRangeNames[idx] ? ` time-range ${timeRangeNames[idx]}` : '';
 
     if (r.port && r.port.startsWith('SVCOG:')) {
       const svcName = r.port.slice(6);
       let line = ` ${action} object-group ${svcName} ${src} ${dst}`;
       if (r.log) line += ' log';
+      line += trSuffix;
       lines.push(line);
       return;
     }
 
-    const proto = r.proto === 'any' ? 'ip' : r.proto;
+    const proto = r.proto === 'any' ? (ipv6 ? 'ipv6' : 'ip') : r.proto;
     const ports = r.port ? r.port.split(',').map(p => p.trim()) : [null];
     ports.forEach(port => {
       let line = ` ${action} ${proto} ${src} ${dst}`;
       if (port) line += ` eq ${port}`;
+      if (proto === 'icmp' && r.icmpType && icmpTypeCisco[r.icmpType]) line += ` ${icmpTypeCisco[r.icmpType]}`;
       if (r.log) line += ' log';
+      line += trSuffix;
       lines.push(line);
     });
   });
 
   const finalAction = (policy === 'ACCEPT') ? 'permit' : 'deny';
-  lines.push(` ${finalAction} ip any any`);
+  lines.push(` ${finalAction} ${ipv6 ? 'ipv6' : 'ip'} any any`);
   lines.push('!');
   lines.push('! Exemple d\'application sur une interface :');
   lines.push('! interface GigabitEthernet0/0');
-  lines.push('!  ip access-group NETFORGE_ACL in');
+  lines.push(`!  ${applyKeyword} ${aclName} in`);
+
+  if (reflexiveEligible.length > 0) {
+    lines.push('!');
+    lines.push('! --- ACL réflexive (stateful) : suivi dynamique du trafic retour ---');
+    lines.push('! La liste ci-dessous s\'applique en sortie (vers l\'extérieur) et déclenche le suivi de session ;');
+    lines.push(`! "evaluate NETFORGE_REFLECT" ci-dessus autorise alors automatiquement le retour dans ${aclName}.`);
+    lines.push(`${aclKeyword} ${aclName}_OUT`);
+    reflexiveEligible.forEach((r) => {
+      if (ipv6 && (r.source.startsWith('OG:') || r.dest.startsWith('OG:'))) return;
+      const src = addrFormat(r.source);
+      const dst = addrFormat(r.dest);
+      const ports = r.port ? r.port.split(',').map(p => p.trim()) : [null];
+      ports.forEach(port => {
+        let line = ` permit ${r.proto} ${src} ${dst}`;
+        if (port) line += ` eq ${port}`;
+        line += ' reflect NETFORGE_REFLECT';
+        lines.push(line);
+      });
+    });
+    lines.push('!');
+    lines.push('! Exemple d\'application (sur l\'interface opposée, direction sortante) :');
+    lines.push('! interface GigabitEthernet0/1');
+    lines.push(`!  ${applyKeyword} ${aclName}_OUT out`);
+  }
+
+  // Limitation de débit (rate-limit) : nécessite du MQC (class-map/policy-map), séparé de l'ACL.
+  const rateLimitedRules = rules.map((r, idx) => ({ r, idx })).filter(x => parseRateLimit(x.r.rateLimit) && !(ipv6 && (x.r.source.startsWith('OG:') || x.r.dest.startsWith('OG:'))));
+  if (rateLimitedRules.length > 0) {
+    lines.push('!');
+    lines.push('! --- Limitation de débit (rate-limit) — nécessite le class-based policing (MQC) ---');
+    rateLimitedRules.forEach(({ r, idx }) => {
+      const rl = parseRateLimit(r.rateLimit);
+      const className = `RL_RULE${idx + 1}`;
+      const acl = `RL_ACL${idx + 1}`;
+      const src = addrFormat(r.source);
+      const dst = addrFormat(r.dest);
+      lines.push(`${aclKeyword} ${acl}`);
+      lines.push(` permit ${r.proto === 'any' ? (ipv6 ? 'ipv6' : 'ip') : r.proto} ${src} ${dst}`);
+      lines.push(`class-map match-all ${className}`);
+      lines.push(` match access-group name ${acl}`);
+      lines.push(`policy-map NETFORGE_POLICING`);
+      lines.push(` class ${className}`);
+      // "police" attend un débit en bits/s ; on convertit approximativement le débit indiqué (paquets/s) en une limite indicative,
+      // avec un commentaire rappelant qu'un calibrage précis dépend de la taille moyenne des paquets réels.
+      lines.push(`  police ${parseInt(rl.count, 10) * 8000} conform-action transmit exceed-action drop`);
+      lines.push(`  ! ↳ ${rl.raw} — valeur indicative convertie en bits/s (à ajuster selon la taille réelle des paquets)`);
+    });
+    lines.push('! Application typique : interface GigabitEthernet0/0 → service-policy input NETFORGE_POLICING');
+  }
+
   return lines.join('\n');
 }
 
@@ -3403,8 +4010,10 @@ fwBtn.addEventListener('click', () => {
   try {
     const policy = document.getElementById('fw-policy').value;
     const format = document.getElementById('fw-format').value;
+    const reflexive = document.getElementById('fw-reflexive').checked;
+    const ipv6 = document.getElementById('fw-ipv6').checked;
     const config = format === 'cisco'
-      ? generateCiscoAclConfig(policy, fwRules)
+      ? generateCiscoAclConfig(policy, fwRules, reflexive, ipv6)
       : generateIptablesConfig(policy, fwRules);
     fwOutput.textContent = config;
     fwOutputBox.classList.remove('hidden');
@@ -3430,8 +4039,17 @@ document.getElementById('fw-export-btn').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+function updateFwFormatFieldsVisibility() {
+  const format = document.getElementById('fw-format').value;
+  document.getElementById('fw-reflexive-row').style.display = format === 'cisco' ? 'flex' : 'none';
+  document.getElementById('fw-ipv6-row').style.display = format === 'cisco' ? 'flex' : 'none';
+}
+updateFwFormatFieldsVisibility();
+
 document.getElementById('fw-policy').addEventListener('change', saveState);
-document.getElementById('fw-format').addEventListener('change', saveState);
+document.getElementById('fw-format').addEventListener('change', () => { updateFwFormatFieldsVisibility(); saveState(); });
+document.getElementById('fw-reflexive').addEventListener('change', saveState);
+document.getElementById('fw-ipv6').addEventListener('change', saveState);
 
 // ---- Testeur de règles ----
 function ipInCidrOrHost(testIp, ruleValue) {
@@ -3510,18 +4128,34 @@ const dnsValueLabels = {
   MX: 'Serveur mail',
   NS: 'Serveur de noms',
   PTR: 'Nom cible (FQDN)',
-  TXT: 'Texte'
+  TXT: 'Texte',
+  SRV: 'Cible (hôte du service)',
+  CAA: 'Autorité de certification (ex: letsencrypt.org)'
+};
+
+const dnsNameLabels = {
+  SRV: 'Nom (ex: _sip._tcp)'
 };
 
 const dnsRecType = document.getElementById('dns-rec-type');
+const dnsRecNameLabel = document.getElementById('dns-rec-name-label');
 const dnsRecValueLabel = document.getElementById('dns-rec-value-label');
 const dnsRecPriorityField = document.getElementById('dns-rec-priority-field');
+const dnsRecPriorityLabel = document.getElementById('dns-rec-priority-label');
+const dnsRecWeightField = document.getElementById('dns-rec-weight-field');
+const dnsRecPortField = document.getElementById('dns-rec-port-field');
+const dnsRecCaaTagField = document.getElementById('dns-rec-caatag-field');
 const dnsRecRows = document.getElementById('dns-rec-rows');
 
 function updateDnsFieldsVisibility() {
   const type = dnsRecType.value;
   dnsRecValueLabel.textContent = dnsValueLabels[type];
-  dnsRecPriorityField.style.display = type === 'MX' ? 'flex' : 'none';
+  dnsRecNameLabel.textContent = dnsNameLabels[type] || 'Nom';
+  dnsRecPriorityField.style.display = (type === 'MX' || type === 'SRV' || type === 'CAA') ? 'flex' : 'none';
+  dnsRecPriorityLabel.textContent = type === 'SRV' ? 'Priorité (SRV)' : type === 'CAA' ? 'Flag (CAA, 0 ou 128)' : 'Priorité (MX)';
+  dnsRecWeightField.style.display = type === 'SRV' ? 'flex' : 'none';
+  dnsRecPortField.style.display = type === 'SRV' ? 'flex' : 'none';
+  dnsRecCaaTagField.style.display = type === 'CAA' ? 'flex' : 'none';
 }
 dnsRecType.addEventListener('change', updateDnsFieldsVisibility);
 updateDnsFieldsVisibility();
@@ -3533,11 +4167,14 @@ function renderDnsRecRows() {
     return;
   }
   dnsRecRows.innerHTML = dnsRecords.map((r, idx) => {
-    const priorityPart = r.type === 'MX' ? ` (priorité ${r.priority})` : '';
+    let extraPart = '';
+    if (r.type === 'MX') extraPart = ` (priorité ${r.priority})`;
+    if (r.type === 'SRV') extraPart = ` (priorité ${r.priority}, poids ${r.weight}, port ${r.port})`;
+    if (r.type === 'CAA') extraPart = ` (flag ${r.priority}, tag ${r.caaTag})`;
     return `
       <div class="port-row">
         <span class="port-badge access">${r.type}</span>
-        <span class="port-detail">${r.name} → ${r.value}${priorityPart}</span>
+        <span class="port-detail">${r.name} → ${r.value}${extraPart}</span>
         <button class="chip-remove" data-remove-dns-rec="${idx}" title="Retirer">&times;</button>
       </div>
     `;
@@ -3549,14 +4186,25 @@ document.getElementById('dns-add-rec-btn').addEventListener('click', () => {
   const type = dnsRecType.value;
   const name = document.getElementById('dns-rec-name').value.trim();
   const value = document.getElementById('dns-rec-value').value.trim();
-  const priority = document.getElementById('dns-rec-priority').value.trim() || '10';
+  const priority = document.getElementById('dns-rec-priority').value.trim() || (type === 'CAA' ? '0' : '10');
+  const weight = document.getElementById('dns-rec-weight').value.trim() || '0';
+  const port = document.getElementById('dns-rec-port').value.trim() || '0';
+  const caaTag = document.getElementById('dns-rec-caatag').value;
 
   if (!name || !value) return;
 
-  dnsRecords.push({ type, name, value, priority: type === 'MX' ? priority : null });
+  dnsRecords.push({
+    type, name, value,
+    priority: (type === 'MX' || type === 'SRV' || type === 'CAA') ? priority : null,
+    weight: type === 'SRV' ? weight : null,
+    port: type === 'SRV' ? port : null,
+    caaTag: type === 'CAA' ? caaTag : null
+  });
   document.getElementById('dns-rec-name').value = '';
   document.getElementById('dns-rec-value').value = '';
   document.getElementById('dns-rec-priority').value = '';
+  document.getElementById('dns-rec-weight').value = '';
+  document.getElementById('dns-rec-port').value = '';
   renderDnsRecRows();
 });
 
@@ -3609,10 +4257,67 @@ function generateDnsZone(zoneName, primaryNs, adminEmail, records) {
       case 'TXT':
         lines.push(`${r.name}   IN  TXT     "${r.value}"`);
         break;
+      case 'SRV':
+        lines.push(`${r.name}   IN  SRV     ${r.priority} ${r.weight} ${r.port} ${r.value}.`);
+        break;
+      case 'CAA':
+        lines.push(`${r.name}   IN  CAA     ${r.priority} ${r.caaTag} "${r.value}"`);
+        break;
     }
   });
 
   return lines.join('\n');
+}
+
+// ---- Génération automatique de la zone inverse (PTR) depuis les enregistrements A ----
+function generateReverseZone(reverseNetInput, zoneName, primaryNs, adminEmail, records) {
+  const match = reverseNetInput.trim().match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
+  if (!match) throw new Error("Indique un réseau valide, ex : 192.168.10.0/24");
+  const cidr = parseInt(match[2], 10);
+  if (cidr < 0 || cidr > 30) throw new Error("CIDR hors plage utile (0-30) pour une zone inverse");
+  if (cidr % 8 !== 0) throw new Error("Pour une zone inverse simple, utilise un CIDR multiple de 8 (/8, /16, /24) — les découpages fins nécessitent la délégation classless (hors périmètre de ce générateur)");
+
+  const netInt = ipToInt(match[1]) & maskFromCidr(cidr);
+  const octets = [(netInt >>> 24) & 255, (netInt >>> 16) & 255, (netInt >>> 8) & 255, netInt & 255];
+  const octetsToKeep = cidr / 8;
+  const arpaOctets = octets.slice(0, octetsToKeep).reverse();
+  const arpaZone = `${arpaOctets.join('.')}.in-addr.arpa`;
+
+  const aRecords = records.filter(r => r.type === 'A');
+  if (aRecords.length === 0) throw new Error("Aucun enregistrement A trouvé — ajoute-en dans la zone directe ci-dessus pour générer la zone inverse");
+
+  const fqdnBase = zoneName ? `.${zoneName}` : '';
+  const matching = aRecords.filter(r => {
+    const ipInt = ipToInt(r.value.trim());
+    if (ipInt === null) return false;
+    return (ipInt & maskFromCidr(cidr)) === netInt;
+  });
+  if (matching.length === 0) throw new Error(`Aucun enregistrement A n'appartient au réseau ${reverseNetInput}`);
+
+  const now = new Date();
+  const serial = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}01`;
+
+  const lines = [];
+  lines.push(`; === Zone inverse (PTR) pour ${reverseNetInput} — générée par NetForge ===`);
+  lines.push('$TTL 86400');
+  lines.push(`@   IN  SOA   ${primaryNs || 'ns1.' + (zoneName || 'local')}. ${adminEmail || 'admin.' + (zoneName || 'local')}. (`);
+  lines.push(`        ${serial} ; serial (yyyymmddnn)`);
+  lines.push('        3600       ; refresh');
+  lines.push('        1800       ; retry');
+  lines.push('        604800     ; expire');
+  lines.push('        86400 )    ; minimum TTL');
+  lines.push('');
+  lines.push(`@   IN  NS    ${primaryNs || 'ns1.' + (zoneName || 'local')}.`);
+  lines.push('');
+
+  matching.forEach(r => {
+    const ipOctets = r.value.trim().split('.');
+    const hostPart = ipOctets.slice(octetsToKeep).reverse().join('.');
+    const fqdn = r.name === '@' ? (zoneName || r.name) : `${r.name}${fqdnBase}`;
+    lines.push(`${hostPart}   IN  PTR     ${fqdn}.`);
+  });
+
+  return { zoneText: lines.join('\n'), arpaZone };
 }
 
 const dnsBtn = document.getElementById('dns-btn');
@@ -3653,6 +4358,44 @@ document.getElementById('dns-export-btn').addEventListener('click', () => {
 
 ['dns-zone-name', 'dns-primary-ns', 'dns-admin-email'].forEach(id => {
   document.getElementById(id).addEventListener('change', saveState);
+});
+
+const dnsReverseBtn = document.getElementById('dns-reverse-btn');
+const dnsReverseError = document.getElementById('dns-reverse-error');
+const dnsReverseOutputBox = document.getElementById('dns-reverse-output-box');
+const dnsReverseOutput = document.getElementById('dns-reverse-output');
+let lastReverseArpaZone = 'zone-inverse';
+
+dnsReverseBtn.addEventListener('click', () => {
+  dnsReverseError.classList.add('hidden');
+  dnsReverseOutputBox.classList.add('hidden');
+  try {
+    const reverseNet = document.getElementById('dns-reverse-net').value;
+    const zoneName = document.getElementById('dns-zone-name').value.trim();
+    const primaryNs = document.getElementById('dns-primary-ns').value.trim();
+    const adminEmail = document.getElementById('dns-admin-email').value.trim();
+    const { zoneText, arpaZone } = generateReverseZone(reverseNet, zoneName, primaryNs, adminEmail, dnsRecords);
+    dnsReverseOutput.textContent = zoneText;
+    lastReverseArpaZone = arpaZone;
+    dnsReverseOutputBox.classList.remove('hidden');
+  } catch (e) {
+    dnsReverseError.textContent = e.message;
+    dnsReverseError.classList.remove('hidden');
+  }
+});
+
+document.getElementById('dns-reverse-copy-btn').addEventListener('click', () => {
+  navigator.clipboard.writeText(dnsReverseOutput.textContent);
+});
+
+document.getElementById('dns-reverse-export-btn').addEventListener('click', () => {
+  const blob = new Blob([dnsReverseOutput.textContent], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${lastReverseArpaZone}.zone`;
+  a.click();
+  URL.revokeObjectURL(url);
 });
 
 renderDnsRecRows();
@@ -3767,9 +4510,9 @@ function buildReportHtml() {
   if (fwRules.length === 0) {
     html += `<p><em>Aucune règle déclarée.</em></p>`;
   } else {
-    html += `<table><tr><th>#</th><th>Action</th><th>Protocole</th><th>Port</th><th>Source</th><th>Destination</th></tr>`;
+    html += `<table><tr><th>#</th><th>Action</th><th>Protocole</th><th>Port</th><th>Source</th><th>Destination</th><th>Log</th><th>Plage horaire</th><th>Rate-limit</th></tr>`;
     fwRules.forEach((r, idx) => {
-      html += `<tr><td>${idx + 1}</td><td>${r.action}</td><td>${r.proto.toUpperCase()}</td><td>${r.port || '—'}</td><td>${r.source}</td><td>${r.dest}</td></tr>`;
+      html += `<tr><td>${idx + 1}</td><td>${r.action}</td><td>${r.proto.toUpperCase()}</td><td>${r.port || '—'}</td><td>${r.source}</td><td>${r.dest}</td><td>${r.log ? 'Oui' : '—'}</td><td>${r.timeRange || '—'}</td><td>${r.rateLimit || '—'}</td></tr>`;
     });
     html += `</table>`;
   }

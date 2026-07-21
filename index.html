@@ -229,6 +229,57 @@
           <button class="btn btn-outline" id="vlsm-export-btn">↓ Exporter le plan (.txt)</button>
         </div>
       </div>
+
+      <div class="section-divider">
+        <span>Résumé de route (agrégation / summarization)</span>
+      </div>
+      <p class="module-sub">Calcule la route agrégée la plus précise couvrant une liste de réseaux — utile pour simplifier une table de routage ou une redistribution.</p>
+
+      <div class="panel">
+        <div class="field">
+          <label>Réseaux à résumer (un par ligne ou séparés par des virgules)</label>
+          <textarea id="summary-networks" rows="4" placeholder="ex: 192.168.0.0/24, 192.168.1.0/24, 192.168.2.0/24, 192.168.3.0/24"></textarea>
+        </div>
+        <button class="btn" id="summary-btn">Calculer le résumé</button>
+        <div class="error hidden" id="summary-error"></div>
+
+        <div class="results hidden" id="summary-results">
+          <div class="result-card" data-copy><div class="k">Route résumée</div><div class="v" id="summary-route">-</div></div>
+          <div class="result-card"><div class="k">Réseaux couverts</div><div class="v" id="summary-count">-</div></div>
+          <div class="result-card"><div class="k">Espace d'adressage</div><div class="v" id="summary-space">-</div></div>
+        </div>
+        <p class="hint hidden" id="summary-note"></p>
+      </div>
+
+      <div class="section-divider">
+        <span>IPv6 — calculateur d'adresse et de sous-réseaux</span>
+      </div>
+      <p class="module-sub">Analyse une adresse IPv6/préfixe : forme développée/compressée, type d'adresse, et découpage en sous-réseaux /64.</p>
+
+      <div class="panel">
+        <div class="field">
+          <label>Adresse IPv6 + préfixe</label>
+          <input type="text" id="v6-input" placeholder="ex: 2001:db8:acad::/48">
+        </div>
+        <button class="btn" id="v6-calc-btn">Analyser</button>
+        <div class="error hidden" id="v6-error"></div>
+
+        <div class="results hidden" id="v6-results">
+          <div class="result-card" data-copy><div class="k">Adresse compressée</div><div class="v" id="v6-compressed">-</div></div>
+          <div class="result-card" data-copy><div class="k">Adresse développée</div><div class="v" id="v6-expanded">-</div></div>
+          <div class="result-card" data-copy><div class="k">Réseau</div><div class="v" id="v6-network">-</div></div>
+          <div class="result-card"><div class="k">Type d'adresse</div><div class="v" id="v6-type">-</div></div>
+          <div class="result-card"><div class="k">Nb de sous-réseaux /64</div><div class="v" id="v6-subnets-count">-</div></div>
+        </div>
+
+        <div class="hidden" id="v6-subnets-box">
+          <div class="builder-label" style="margin-top:16px;">Premiers sous-réseaux /64</div>
+          <table class="vlsm-table" id="v6-subnets-table">
+            <thead><tr><th>#</th><th>Sous-réseau</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section id="module-vlan" class="module hidden">
@@ -291,7 +342,7 @@
           </div>
           <div class="hint">Astuce : "0/1-4" ajoute d'un coup les ports 1 à 4</div>
 
-          <button class="btn-link-sm" id="advanced-toggle">+ Options avancées (description, VLAN voix, natif, port-security)</button>
+          <button class="btn-link-sm" id="advanced-toggle">+ Options avancées (description, VLAN voix, natif, port-security, DHCP snooping, storm-control)</button>
 
           <div class="advanced-row hidden" id="advanced-row">
             <div class="adv-field">
@@ -308,6 +359,19 @@
             </div>
             <div class="adv-field adv-checkbox" id="adv-security-field">
               <label><input type="checkbox" id="new-port-security"> Activer port-security (1 MAC, violation restrict)</label>
+            </div>
+            <div class="adv-field adv-checkbox" id="adv-trust-field">
+              <label><input type="checkbox" id="new-port-trust"> Port de confiance DHCP snooping (uplink/serveur DHCP)</label>
+            </div>
+            <div class="adv-field" id="adv-storm-field">
+              <label>Storm-control broadcast (% du débit, vide = désactivé)</label>
+              <input type="text" id="new-port-storm" placeholder="ex: 20">
+            </div>
+          </div>
+
+          <div class="builder-row" style="margin-top:12px;">
+            <div class="adv-field adv-checkbox">
+              <label><input type="checkbox" id="vlan-dhcp-snooping"> Activer DHCP snooping globalement sur le switch</label>
             </div>
           </div>
 
@@ -352,6 +416,18 @@
               <option value="cisco">ACL Cisco (routeur)</option>
             </select>
           </div>
+        </div>
+
+        <div class="builder-row" id="fw-reflexive-row" style="display:none;">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="fw-reflexive"> Générer en ACL réflexives (stateful) — le retour du trafic autorisé est suivi dynamiquement, sans règle explicite à ajouter dans l'autre sens
+          </label>
+        </div>
+
+        <div class="builder-row" id="fw-ipv6-row" style="display:none;">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="fw-ipv6"> Adressage IPv6 — génère une <code>ipv6 access-list</code> (source/destination en <code>2001:db8::/64</code> ou <code>any</code>) au lieu d'une ACL IPv4
+          </label>
         </div>
 
         <div class="builder-label" style="margin-top:20px;">Groupes d'objets Cisco (réutilisables dans les règles)</div>
@@ -417,6 +493,17 @@
             <label>Port(s)</label>
             <input type="text" id="fw-rule-port" placeholder="22 ou 80,443">
           </div>
+          <div class="mini-field" id="fw-rule-icmp-field" style="display:none;">
+            <label>Type ICMP</label>
+            <select id="fw-rule-icmptype">
+              <option value="">Tous types</option>
+              <option value="echo-request">echo-request (ping)</option>
+              <option value="echo-reply">echo-reply</option>
+              <option value="time-exceeded">time-exceeded (traceroute)</option>
+              <option value="unreachable">unreachable (destination injoignable)</option>
+              <option value="redirect">redirect</option>
+            </select>
+          </div>
           <div class="mini-field grow">
             <label>Source</label>
             <input type="text" id="fw-rule-source" placeholder="any" value="any">
@@ -432,6 +519,17 @@
             </label>
           </div>
           <button class="btn-add" id="fw-add-rule-btn">+ Ajouter</button>
+        </div>
+
+        <div class="builder-row" style="margin-top:8px;">
+          <div class="mini-field grow">
+            <label>Plage horaire (time-range, ACL Cisco uniquement)</label>
+            <input type="text" id="fw-rule-timerange" placeholder="ex: 08:00-18:00 (lun-ven)">
+          </div>
+          <div class="mini-field grow">
+            <label>Limite de débit (rate-limit, anti-DoS)</label>
+            <input type="text" id="fw-rule-ratelimit" placeholder="ex: 100/sec">
+          </div>
         </div>
 
         <div class="builder-row" style="margin-top:8px;">
@@ -537,10 +635,12 @@
               <option value="NS">NS</option>
               <option value="PTR">PTR</option>
               <option value="TXT">TXT</option>
+              <option value="SRV">SRV</option>
+              <option value="CAA">CAA</option>
             </select>
           </div>
           <div class="mini-field grow">
-            <label>Nom</label>
+            <label id="dns-rec-name-label">Nom</label>
             <input type="text" id="dns-rec-name" placeholder="ex: www, mail, @">
           </div>
           <div class="mini-field grow">
@@ -548,13 +648,47 @@
             <input type="text" id="dns-rec-value" placeholder="ex: 192.168.10.10">
           </div>
           <div class="mini-field" id="dns-rec-priority-field" style="display:none;">
-            <label>Priorité (MX)</label>
+            <label id="dns-rec-priority-label">Priorité (MX)</label>
             <input type="text" id="dns-rec-priority" placeholder="10">
+          </div>
+          <div class="mini-field" id="dns-rec-weight-field" style="display:none;">
+            <label>Poids (SRV)</label>
+            <input type="text" id="dns-rec-weight" placeholder="0">
+          </div>
+          <div class="mini-field" id="dns-rec-port-field" style="display:none;">
+            <label>Port (SRV)</label>
+            <input type="text" id="dns-rec-port" placeholder="443">
+          </div>
+          <div class="mini-field" id="dns-rec-caatag-field" style="display:none;">
+            <label>Tag (CAA)</label>
+            <select id="dns-rec-caatag">
+              <option value="issue">issue (CA autorisée)</option>
+              <option value="issuewild">issuewild (wildcard)</option>
+              <option value="iodef">iodef (rapport de violation)</option>
+            </select>
           </div>
           <button class="btn-add" id="dns-add-rec-btn">+ Ajouter</button>
         </div>
 
         <div class="port-rows" id="dns-rec-rows" style="margin-top:16px;"></div>
+
+        <div class="builder-label" style="margin-top:24px;">Zone inverse (PTR) automatique</div>
+        <p class="hint">Génère un fichier de zone inverse à partir des enregistrements A ci-dessus, pour un réseau donné.</p>
+        <div class="builder-row">
+          <div class="mini-field grow">
+            <label>Réseau (in-addr.arpa)</label>
+            <input type="text" id="dns-reverse-net" placeholder="ex: 192.168.10.0/24">
+          </div>
+          <button class="btn-add" id="dns-reverse-btn">↻ Générer la zone inverse</button>
+        </div>
+        <div class="error hidden" id="dns-reverse-error"></div>
+        <div class="hidden" id="dns-reverse-output-box">
+          <pre class="code-output" id="dns-reverse-output"></pre>
+          <div class="output-actions">
+            <button class="btn btn-outline" id="dns-reverse-copy-btn">Copier</button>
+            <button class="btn btn-outline" id="dns-reverse-export-btn">↓ Exporter (.zone)</button>
+          </div>
+        </div>
 
         <button class="btn" id="dns-btn" style="margin-top:20px;">Générer la zone</button>
         <div class="error hidden" id="dns-error"></div>
@@ -579,19 +713,19 @@
 
       <div class="panel guide-panel">
         <h2>Subnetting / VLSM</h2>
-        <p>Calcule le plan d'adressage d'un réseau (adresse réseau, masque, broadcast, plage utilisable) à partir d'une IP et d'un CIDR. Le découpage VLSM répartit automatiquement un réseau de base en plusieurs sous-réseaux selon des besoins en hôtes différents — l'exercice classique d'adressage en <strong>SISR1</strong>.</p>
+        <p>Calcule le plan d'adressage d'un réseau (adresse réseau, masque, broadcast, plage utilisable) à partir d'une IP et d'un CIDR. Le découpage VLSM répartit automatiquement un réseau de base en plusieurs sous-réseaux selon des besoins en hôtes différents — l'exercice classique d'adressage en <strong>SISR1</strong>. Inclut aussi un calculateur de <strong>résumé de route</strong> (agrégation CIDR) et un <strong>calculateur IPv6</strong> (compression, type d'adresse, découpage en /64).</p>
 
         <h2>VLAN</h2>
-        <p>Génère une configuration de switch Cisco IOS complète : VLANs, ports en accès ou en trunk, SVI (interface virtuelle pour le routage inter-VLAN), VLAN voix, port-security. Base de tout TP de commutation.</p>
+        <p>Génère une configuration de switch Cisco IOS complète : VLANs, ports en accès ou en trunk, SVI (interface virtuelle pour le routage inter-VLAN), VLAN voix, port-security, <strong>DHCP snooping</strong> et <strong>storm-control</strong>. Base de tout TP de commutation.</p>
 
         <h2>Firewall / ACL</h2>
-        <p>Génère des règles de filtrage sous deux formats : script <code>iptables</code> (serveur Linux) ou ACL Cisco (routeur). Inclut un testeur de règles pour vérifier quelle règle s'applique en premier à un paquet donné — utile pour réviser la logique des ACL avant un examen.</p>
+        <p>Génère des règles de filtrage sous deux formats : script <code>iptables</code> (serveur Linux) ou ACL Cisco (routeur), en <strong>IPv4 ou IPv6</strong>. Prend en charge le filtrage par <strong>type ICMP</strong>, les <strong>plages horaires</strong> (time-range), la <strong>limitation de débit</strong> (rate-limit / police MQC) et la génération d'<strong>ACL réflexives</strong> (stateful) côté Cisco. Inclut un testeur de règles pour vérifier quelle règle s'applique en premier à un paquet donné — utile pour réviser la logique des ACL avant un examen.</p>
 
         <h2>Topologie</h2>
-        <p>Le module central : déclare plusieurs équipements (switchs, routeurs, PC, serveurs), les relie visuellement, et configure chacun individuellement. Couvre le routage inter-VLAN (router-on-a-stick), le DHCP, l'OSPF (zone unique), le NAT/PAT, l'EtherChannel et HSRP/VRRP — l'essentiel du programme SISR2 en administration réseau.</p>
+        <p>Le module central : déclare plusieurs équipements (switchs, routeurs, PC, serveurs), les relie visuellement, et configure chacun individuellement. Couvre le routage inter-VLAN (router-on-a-stick), le DHCP, l'OSPF (zone unique), le <strong>BGP</strong> (eBGP simple), le NAT/PAT (1:1 et <strong>redirection de port</strong>), l'EtherChannel et HSRP/VRRP — l'essentiel du programme SISR2 en administration réseau.</p>
 
         <h2>DNS</h2>
-        <p>Génère un fichier de zone BIND (SOA, NS, A, CNAME, MX, PTR, TXT) — pour les TP de mise en place d'un serveur DNS.</p>
+        <p>Génère un fichier de zone BIND (SOA, NS, A, CNAME, MX, PTR, TXT, <strong>SRV</strong>) — pour les TP de mise en place d'un serveur DNS. Peut aussi générer automatiquement la <strong>zone inverse (PTR)</strong> à partir des enregistrements A déjà saisis.</p>
 
         <h2>Sauvegarde, export, rapport</h2>
         <p>Le travail dans Topologie, Firewall et DNS est sauvegardé automatiquement en local (rien n'est envoyé sur internet). Le bouton "Exporter" en bas de la sidebar télécharge tout le projet en JSON pour le sauvegarder ailleurs ou le transférer sur un autre PC. Le bouton "Rapport" génère un document imprimable (PDF via le navigateur) récapitulant toute la configuration — pratique pour un rendu de TP.</p>
