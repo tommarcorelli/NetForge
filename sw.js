@@ -1,9 +1,16 @@
-const CACHE_NAME = 'netforge-v27';
+const CACHE_NAME = 'netforge-v29';
 const ASSETS = [
   './',
   './index.html',
   './css/style.css',
-  './js/app.js',
+  './js/core.js',
+  './js/subnetting.js',
+  './js/vlan.js',
+  './js/topology-builder.js',
+  './js/topology-configgen.js',
+  './js/firewall.js',
+  './js/dns.js',
+  './js/actions.js',
   './manifest.json',
   './assets/logo.svg'
 ];

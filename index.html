@@ -424,6 +424,22 @@
           </label>
         </div>
 
+        <div class="builder-row" id="fw-zbf-row" style="display:none;">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="fw-zbf"> Générer en pare-feu à zones (ZBF/ZFW) au lieu d'une ACL classique — approche moderne recommandée par Cisco pour le filtrage stateful (remplace les ACL réflexives)
+          </label>
+        </div>
+        <div class="builder-row" id="fw-zbf-zones-row" style="display:none;">
+          <div class="mini-field grow">
+            <label>Interface intérieure (zone IN, réseau protégé)</label>
+            <input type="text" id="fw-zbf-inside-if" placeholder="ex: GigabitEthernet0/0">
+          </div>
+          <div class="mini-field grow">
+            <label>Interface extérieure (zone OUT, vers Internet)</label>
+            <input type="text" id="fw-zbf-outside-if" placeholder="ex: GigabitEthernet0/1">
+          </div>
+        </div>
+
         <div class="builder-row" id="fw-ipv6-row" style="display:none;">
           <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
             <input type="checkbox" id="fw-ipv6"> Adressage IPv6 — génère une <code>ipv6 access-list</code> (source/destination en <code>2001:db8::/64</code> ou <code>any</code>) au lieu d'une ACL IPv4
@@ -707,7 +723,7 @@
       <div class="module-header">
         <div>
           <h1 class="module-title">Guide</h1>
-          <p class="module-sub">Ce que fait chaque module, et le lien avec le programme BTS SISR.</p>
+          <p class="module-sub">Ce que fait chaque module, et à quoi ça sert en administration réseau — du TP d'école à des scénarios d'entreprise plus avancés.</p>
         </div>
       </div>
 
@@ -719,10 +735,10 @@
         <p>Génère une configuration de switch Cisco IOS complète : VLANs, ports en accès ou en trunk, SVI (interface virtuelle pour le routage inter-VLAN), VLAN voix, port-security, <strong>DHCP snooping</strong> et <strong>storm-control</strong>. Base de tout TP de commutation.</p>
 
         <h2>Firewall / ACL</h2>
-        <p>Génère des règles de filtrage sous deux formats : script <code>iptables</code> (serveur Linux) ou ACL Cisco (routeur), en <strong>IPv4 ou IPv6</strong>. Prend en charge le filtrage par <strong>type ICMP</strong>, les <strong>plages horaires</strong> (time-range), la <strong>limitation de débit</strong> (rate-limit / police MQC) et la génération d'<strong>ACL réflexives</strong> (stateful) côté Cisco. Inclut un testeur de règles pour vérifier quelle règle s'applique en premier à un paquet donné — utile pour réviser la logique des ACL avant un examen.</p>
+        <p>Génère des règles de filtrage sous deux formats : script <code>iptables</code> (serveur Linux) ou ACL Cisco (routeur), en <strong>IPv4 ou IPv6</strong>. Prend en charge le filtrage par <strong>type ICMP</strong>, les <strong>plages horaires</strong> (time-range), la <strong>limitation de débit</strong> (rate-limit / police MQC), les <strong>ACL réflexives</strong> et le <strong>pare-feu à zones (ZBF)</strong> — l'approche stateful moderne recommandée par Cisco. Inclut un testeur de règles pour vérifier quelle règle s'applique en premier à un paquet donné.</p>
 
         <h2>Topologie</h2>
-        <p>Le module central : déclare plusieurs équipements (switchs, routeurs, PC, serveurs), les relie visuellement, et configure chacun individuellement. Couvre le routage inter-VLAN (router-on-a-stick), le DHCP, l'OSPF (zone unique), le <strong>BGP</strong> (eBGP simple), le NAT/PAT (1:1 et <strong>redirection de port</strong>), l'EtherChannel et HSRP/VRRP — l'essentiel du programme SISR2 en administration réseau.</p>
+        <p>Le module central : déclare plusieurs équipements (switchs, routeurs, PC, serveurs), les relie visuellement, et configure chacun individuellement. Couvre le routage inter-VLAN (router-on-a-stick), le DHCP, l'OSPF avec redistribution vers BGP, le <strong>BGP</strong> (eBGP, filtrage entrant par prefix-list), le <strong>VPN IPsec site-à-site</strong> (IKEv1 ou IKEv2), le NAT/PAT (1:1 et redirection de port), l'EtherChannel et HSRP/VRRP — de l'administration réseau de base jusqu'à des scénarios d'interconnexion plus avancés.</p>
 
         <h2>DNS</h2>
         <p>Génère un fichier de zone BIND (SOA, NS, A, CNAME, MX, PTR, TXT, <strong>SRV</strong>) — pour les TP de mise en place d'un serveur DNS. Peut aussi générer automatiquement la <strong>zone inverse (PTR)</strong> à partir des enregistrements A déjà saisis.</p>
@@ -748,6 +764,14 @@
   <div class="cidr-cheatsheet" id="cidr-cheatsheet"></div>
 </aside>
 
-<script src="js/app.js"></script>
+<!-- Découpé en plusieurs fichiers pour rester lisible/léger à éditer (ordre de chargement important : core.js en premier). -->
+<script src="js/core.js"></script>
+<script src="js/subnetting.js"></script>
+<script src="js/vlan.js"></script>
+<script src="js/topology-builder.js"></script>
+<script src="js/topology-configgen.js"></script>
+<script src="js/firewall.js"></script>
+<script src="js/dns.js"></script>
+<script src="js/actions.js"></script>
 </body>
 </html>

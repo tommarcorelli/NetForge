@@ -20,17 +20,32 @@ Fournir en un seul outil plusieurs générateurs de fichiers de config réseau, 
 
 ```
 netforge/
-├── index.html          # Shell principal + navigation entre modules
-├── manifest.json        # Manifest PWA
-├── sw.js                 # Service worker (mode hors-ligne)
+├── index.html             # Page unique, charge les 8 fichiers JS dans l'ordre
+├── manifest.json          # Manifest PWA
+├── sw.js                    # Service worker (mode hors-ligne, met en cache chaque fichier JS)
 ├── css/
-│   └── style.css         # Design system (couleurs, typo, composants)
-├── js/
-│   └── app.js             # Navigation + logique du module Subnetting
+│   └── style.css            # Design system (couleurs, typo, composants)
+├── js/                        # Logique applicative, découpée par domaine (~4700 lignes au total)
+│   ├── core.js                 # Persistance, undo/redo, gestion de projets, utilitaires IP — CHARGÉ EN PREMIER
+│   ├── subnetting.js             # Calculateur simple, VLSM, résumé de route, calculateur IPv6
+│   ├── vlan.js                     # Module VLAN (constructeur de config switch)
+│   ├── topology-builder.js           # Module Topologie — panneaux de configuration par équipement
+│   ├── topology-configgen.js           # Module Topologie — génération des configs + validation + restauration au chargement
+│   ├── firewall.js                       # Module Firewall (iptables / ACL Cisco / ZBF)
+│   ├── dns.js                              # Module DNS (zone BIND)
+│   └── actions.js                            # Export/import de projet, rapport imprimable
 ├── assets/
-│   └── logo.svg            # Logo néon (glyphe hexagonal réseau + étincelle)
+│   └── logo.svg              # Logo néon (glyphe hexagonal réseau + étincelle)
 └── README.md
 ```
+
+### Pourquoi plusieurs fichiers JS et pas de build
+
+NetForge doit s'ouvrir aussi bien en double-clic (`file://`) qu'en HTTP (serveur local, GitHub Pages). Un chargement des modules via `fetch()` casserait le mode `file://` (CORS), et un système de build (Node, bundler) ajoute une étape et une dépendance que le projet ne veut pas. La solution retenue : de **vrais fichiers `.js` séparés**, chargés via plusieurs balises `<script src="...">` classiques dans `index.html`, dans l'ordre indiqué ci-dessus. Ça fonctionne nativement dans les deux modes, sans aucun outil.
+
+**Ordre de chargement important** : `core.js` doit être chargé en premier (il définit les utilitaires et la persistance utilisés par tous les autres fichiers) ; les autres suivent l'ordre des modules dans la sidebar. Si un nouveau fichier JS est ajouté, penser à l'ajouter à la fois dans `index.html` (balise `<script>`) et dans la liste `ASSETS` de `sw.js` (sinon il ne sera pas mis en cache hors-ligne).
+
+`index.html` lui-même reste un fichier unique : le HTML n'a pas d'équivalent natif à `<script src>` pour s'inclure lui-même sans un build ou un `fetch()`, donc il n'a pas été découpé.
 
 ## Design
 
@@ -49,6 +64,18 @@ python -m http.server 8000
 Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
+
+### 2026-07-22 — Découpage de app.js en plusieurs fichiers (sans build)
+- `js/app.js` (200 Ko, ~4700 lignes) est remplacé par **8 fichiers séparés** dans `js/` (`core.js`, `subnetting.js`, `vlan.js`, `topology-builder.js`, `topology-configgen.js`, `firewall.js`, `dns.js`, `actions.js`), chargés via plusieurs balises `<script src>` classiques — pas de build, pas de Node, pas de `fetch()` : fonctionne en `file://` comme en HTTP
+- Vérifié que la concaténation des 8 fichiers, dans l'ordre de chargement, reproduit le contenu de l'ancien `app.js` **au caractère près** (aucune perte ni duplication)
+- **Bug latent découvert et corrigé pendant cette opération** : au chargement de la page, certains modules (VLAN notamment) déclenchent un rendu initial qui appelle `saveState()` *avant* que l'état sauvegardé ne soit restauré en mémoire — ce qui pouvait écraser silencieusement la sauvegarde avec des valeurs par défaut. Dans l'ancien fichier unique, cet appel prématuré déclenchait une `ReferenceError` (accès à une variable en zone morte temporelle) silencieusement avortée, ce qui masquait le problème par accident. Une fois séparé en plusieurs fichiers, cette protection accidentelle a disparu et le bug est devenu visible (ex : le format Firewall ne survivait plus à un rechargement de page). Corrigé à la racine : l'état sauvegardé est maintenant capturé dans un instantané figé dès la toute première ligne exécutable de `core.js`, avant qu'aucun module n'ait pu s'exécuter, et c'est cet instantané qui est utilisé pour la restauration plutôt qu'une relecture du localStorage à ce moment-là.
+- (Une tentative précédente de découpage du HTML via un script Node de build a été abandonnée : ce n'était pas ce qui était demandé, et ajoutait une dépendance inutile.)
+
+### 2026-07-22 — Fonctionnalités niveau entreprise ("au-delà du BTS")
+- **Topologie** : le VPN IPsec site-à-site existant a été enrichi avec le support **IKEv2** (proposal/policy/keyring/profile), en plus de l'IKEv1 historique — sélecteur de version dans le panneau VPN de chaque routeur
+- **Topologie/BGP** : filtrage entrant par **prefix-list + route-map** — option pour n'accepter que la route par défaut (0.0.0.0/0) de chaque voisin BGP, scénario classique de sortie vers un fournisseur d'accès
+- **Firewall** : nouveau mode **pare-feu à zones (Zone-Based Firewall / ZBF)**, alternative moderne aux ACL réflexives recommandée par Cisco — zones de sécurité, class-map/policy-map type inspect, zone-pair, affectation d'interfaces aux zones
+- Correctif : l'ajout d'une interface sur un routeur ne rafraîchissait pas la liste déroulante "interface de sortie" du NAT/VPN tant qu'on ne changeait pas d'écran — corrigé
 
 ### 2026-07-21 — ACL IPv6 (Firewall)
 - **Firewall/ACL** : case "Adressage IPv6" (format Cisco) — génère une `ipv6 access-list` avec adresses en préfixe/longueur (ex: `2001:db8:acad::/64`) au lieu d'une ACL IPv4 à masque générique, avec `ipv6 traffic-filter` pour l'application sur interface. Compatible avec les ACL réflexives et la limitation de débit déjà existantes. Les object-groups réseau (IPv4 uniquement dans cet outil) sont automatiquement ignorés avec un avertissement en mode IPv6

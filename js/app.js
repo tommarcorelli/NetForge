@@ -77,7 +77,8 @@ const STATE_SHAPE = {
   deviceVpn: 'object', deviceSecurity: 'object',
   deviceIdSeq: 'number',
   fwPolicy: 'string', dnsZoneName: 'string', dnsPrimaryNs: 'string', dnsAdminEmail: 'string', fwFormat: 'string',
-  vlanDhcpSnooping: 'boolean', fwReflexive: 'boolean', fwIpv6: 'boolean'
+  fwZbfInsideIf: 'string', fwZbfOutsideIf: 'string',
+  vlanDhcpSnooping: 'boolean', fwReflexive: 'boolean', fwIpv6: 'boolean', fwZbf: 'boolean'
 };
 
 function isPlainObject(v) {
@@ -198,6 +199,12 @@ function applyStateSnapshot(json) {
   if (fwReflexiveEl) fwReflexiveEl.checked = !!sanitized.fwReflexive;
   const fwIpv6El = document.getElementById('fw-ipv6');
   if (fwIpv6El) fwIpv6El.checked = !!sanitized.fwIpv6;
+  const fwZbfEl = document.getElementById('fw-zbf');
+  if (fwZbfEl) fwZbfEl.checked = !!sanitized.fwZbf;
+  const fwZbfInsideEl = document.getElementById('fw-zbf-inside-if');
+  if (fwZbfInsideEl) fwZbfInsideEl.value = sanitized.fwZbfInsideIf || '';
+  const fwZbfOutsideEl = document.getElementById('fw-zbf-outside-if');
+  if (fwZbfOutsideEl) fwZbfOutsideEl.value = sanitized.fwZbfOutsideIf || '';
   if (typeof updateFwFormatFieldsVisibility === 'function') updateFwFormatFieldsVisibility();
 
   if (selectedDeviceId && !devices.find(d => d.id === selectedDeviceId)) {
@@ -294,7 +301,10 @@ function saveState() {
       dnsAdminEmail: (typeof document !== 'undefined' && document.getElementById('dns-admin-email')) ? document.getElementById('dns-admin-email').value : '',
       vlanDhcpSnooping: (typeof document !== 'undefined' && document.getElementById('vlan-dhcp-snooping')) ? document.getElementById('vlan-dhcp-snooping').checked : false,
       fwReflexive: (typeof document !== 'undefined' && document.getElementById('fw-reflexive')) ? document.getElementById('fw-reflexive').checked : false,
-      fwIpv6: (typeof document !== 'undefined' && document.getElementById('fw-ipv6')) ? document.getElementById('fw-ipv6').checked : false
+      fwIpv6: (typeof document !== 'undefined' && document.getElementById('fw-ipv6')) ? document.getElementById('fw-ipv6').checked : false,
+      fwZbf: (typeof document !== 'undefined' && document.getElementById('fw-zbf')) ? document.getElementById('fw-zbf').checked : false,
+      fwZbfInsideIf: (typeof document !== 'undefined' && document.getElementById('fw-zbf-inside-if')) ? document.getElementById('fw-zbf-inside-if').value : '',
+      fwZbfOutsideIf: (typeof document !== 'undefined' && document.getElementById('fw-zbf-outside-if')) ? document.getElementById('fw-zbf-outside-if').value : ''
     };
     state.schemaVersion = CURRENT_SCHEMA_VERSION;
     const active = getActiveProject();
@@ -1619,7 +1629,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
   deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
-  deviceVpn[id] = { enabled: false, peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha', dhGroup: '2' };
+  deviceVpn[id] = { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
 
   nameInput.value = '';
@@ -2168,6 +2178,11 @@ function renderDeviceConfigPanel() {
             <input type="checkbox" id="dev-bgp-redist-ospf"> Redistribuer les routes OSPF dans BGP (annoncer le réseau interne vers l'extérieur)
           </label>
         </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-bgp-default-only"> Filtrage entrant : n'accepter que la route par défaut (0.0.0.0/0) de chaque voisin — via <code>prefix-list</code> + <code>route-map</code>
+          </label>
+        </div>
         <button class="btn-add" id="dev-bgp-save-btn">Enregistrer</button>
         <div class="hint" id="dev-bgp-hint"></div>
 
@@ -2240,6 +2255,13 @@ function renderDeviceConfigPanel() {
               <option value="yes">Oui</option>
             </select>
           </div>
+          <div class="mini-field">
+            <label>Version IKE</label>
+            <select id="dev-vpn-ike">
+              <option value="1">IKEv1</option>
+              <option value="2">IKEv2 (recommandé)</option>
+            </select>
+          </div>
           <div class="mini-field grow">
             <label>IP du pair distant (WAN)</label>
             <input type="text" id="dev-vpn-peer" placeholder="203.0.113.20">
@@ -2269,22 +2291,25 @@ function renderDeviceConfigPanel() {
             <select id="dev-vpn-encryption">
               <option value="aes 256">AES-256</option>
               <option value="aes 128">AES-128</option>
-              <option value="3des">3DES</option>
+              <option value="3des">3DES (obsolète)</option>
             </select>
           </div>
           <div class="mini-field">
             <label>Hachage</label>
             <select id="dev-vpn-hash">
-              <option value="sha">SHA</option>
-              <option value="md5">MD5</option>
+              <option value="sha256">SHA-256</option>
+              <option value="sha384">SHA-384</option>
+              <option value="sha">SHA-1 (obsolète)</option>
+              <option value="md5">MD5 (obsolète)</option>
             </select>
           </div>
           <div class="mini-field">
             <label>Groupe DH</label>
             <select id="dev-vpn-dhgroup">
-              <option value="2">Groupe 2</option>
-              <option value="5">Groupe 5</option>
               <option value="14">Groupe 14</option>
+              <option value="19">Groupe 19 (ECC)</option>
+              <option value="5">Groupe 5 (obsolète)</option>
+              <option value="2">Groupe 2 (obsolète)</option>
             </select>
           </div>
           <button class="btn-add" id="dev-vpn-save-btn">Enregistrer</button>
@@ -2421,7 +2446,7 @@ function renderDeviceConfigPanel() {
       document.getElementById('dev-if-redundancy-preempt').checked = false;
       document.getElementById('dev-if-redundancy-fields').style.display = 'none';
       document.getElementById('dev-if-redundancy-preempt-field').style.display = 'none';
-      renderDevIfRows();
+      renderDeviceConfigPanel();
       saveState();
     });
 
@@ -2461,11 +2486,12 @@ function renderDeviceConfigPanel() {
     });
 
     // ---- BGP ----
-    const bgp = deviceBgp[selectedDeviceId] || { enabled: false, asNumber: '', networks: [], neighbors: [], redistOspf: false };
+    const bgp = deviceBgp[selectedDeviceId] || { enabled: false, asNumber: '', networks: [], neighbors: [], redistOspf: false, defaultOnly: false };
     document.getElementById('dev-bgp-enabled').value = bgp.enabled ? 'yes' : 'no';
     document.getElementById('dev-bgp-as').value = bgp.asNumber || '';
     document.getElementById('dev-bgp-networks').value = (bgp.networks || []).join(', ');
     document.getElementById('dev-bgp-redist-ospf').checked = !!bgp.redistOspf;
+    document.getElementById('dev-bgp-default-only').checked = !!bgp.defaultOnly;
     document.getElementById('dev-bgp-hint').textContent = bgp.enabled
       ? `BGP actif (AS ${bgp.asNumber || '?'}) — ${(bgp.neighbors || []).length} voisin(s) configuré(s)`
       : '';
@@ -2513,7 +2539,8 @@ function renderDeviceConfigPanel() {
         asNumber: document.getElementById('dev-bgp-as').value.trim(),
         networks: networksRaw.split(',').map(s => s.trim()).filter(Boolean),
         neighbors: existing.neighbors || [],
-        redistOspf: document.getElementById('dev-bgp-redist-ospf').checked
+        redistOspf: document.getElementById('dev-bgp-redist-ospf').checked,
+        defaultOnly: document.getElementById('dev-bgp-default-only').checked
       };
       renderDeviceConfigPanel();
     });
@@ -2604,8 +2631,9 @@ function renderDeviceConfigPanel() {
       ? '<option value="">— aucune interface avec IP —</option>'
       : ifaceFullNames.map(name => `<option value="${name}">${name}</option>`).join('');
 
-    const vpn = deviceVpn[selectedDeviceId] || { enabled: false, peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha', dhGroup: '2' };
+    const vpn = deviceVpn[selectedDeviceId] || { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
     document.getElementById('dev-vpn-enabled').value = vpn.enabled ? 'yes' : 'no';
+    document.getElementById('dev-vpn-ike').value = vpn.ike || '2';
     document.getElementById('dev-vpn-peer').value = vpn.peerIp;
     document.getElementById('dev-vpn-psk').value = vpn.presharedKey;
     document.getElementById('dev-vpn-local-net').value = vpn.localNetwork;
@@ -2622,6 +2650,7 @@ function renderDeviceConfigPanel() {
 
       deviceVpn[selectedDeviceId] = {
         enabled: document.getElementById('dev-vpn-enabled').value === 'yes',
+        ike: document.getElementById('dev-vpn-ike').value,
         peerIp,
         presharedKey: document.getElementById('dev-vpn-psk').value.trim(),
         localNetwork: localNet,
@@ -3033,17 +3062,41 @@ function generateRouterDeviceConfig(device) {
   const vpn = deviceVpn[device.id];
   if (vpn && vpn.enabled && vpn.peerIp && vpn.outsideIface && vpn.localNetwork && vpn.remoteNetwork) {
     lines.push('! --- VPN Site-à-Site (IPsec) ---');
-    lines.push('crypto isakmp policy 10');
-    lines.push(` encryption ${vpn.encryption}`);
-    lines.push(` hash ${vpn.hash}`);
-    lines.push(' authentication pre-share');
-    lines.push(` group ${vpn.dhGroup}`);
-    lines.push('!');
-    lines.push(`crypto isakmp key ${vpn.presharedKey || '<A_DEFINIR>'} address ${vpn.peerIp}`);
-    lines.push('!');
+    if (vpn.ike === '1') {
+      lines.push('crypto isakmp policy 10');
+      lines.push(` encryption ${vpn.encryption}`);
+      lines.push(` hash ${vpn.hash}`);
+      lines.push(' authentication pre-share');
+      lines.push(` group ${vpn.dhGroup}`);
+      lines.push('!');
+      lines.push(`crypto isakmp key ${vpn.presharedKey || '<A_DEFINIR>'} address ${vpn.peerIp}`);
+      lines.push('!');
+    } else {
+      // IKEv2 (recommandé) : remplace la politique ISAKMP historique par un proposal/profile IKEv2, plus flexible et plus sûr.
+      lines.push('crypto ikev2 proposal NETFORGE-IKEV2-PROPOSAL');
+      lines.push(` encryption ${vpn.encryption}`);
+      lines.push(` integrity ${vpn.hash}`);
+      lines.push(` group ${vpn.dhGroup}`);
+      lines.push('!');
+      lines.push('crypto ikev2 policy NETFORGE-IKEV2-POLICY');
+      lines.push(' proposal NETFORGE-IKEV2-PROPOSAL');
+      lines.push('!');
+      lines.push('crypto ikev2 keyring NETFORGE-IKEV2-KEYRING');
+      lines.push(` peer NETFORGE-PEER`);
+      lines.push(`  address ${vpn.peerIp}`);
+      lines.push(`  pre-shared-key ${vpn.presharedKey || '<A_DEFINIR>'}`);
+      lines.push('!');
+      lines.push('crypto ikev2 profile NETFORGE-IKEV2-PROFILE');
+      lines.push(` match identity remote address ${vpn.peerIp} 255.255.255.255`);
+      lines.push(' authentication local pre-share');
+      lines.push(' authentication remote pre-share');
+      lines.push(' keyring local NETFORGE-IKEV2-KEYRING');
+      lines.push('!');
+    }
 
     const espEncryption = vpn.encryption === '3des' ? 'esp-3des' : `esp-${vpn.encryption}`;
     lines.push(`crypto ipsec transform-set NETFORGE-TSET ${espEncryption} esp-${vpn.hash}-hmac`);
+    lines.push(' mode tunnel');
     lines.push('!');
 
     const [localIp, localCidr] = vpn.localNetwork.split('/');
@@ -3061,6 +3114,7 @@ function generateRouterDeviceConfig(device) {
     lines.push('crypto map NETFORGE-VPNMAP 10 ipsec-isakmp');
     lines.push(` set peer ${vpn.peerIp}`);
     lines.push(' set transform-set NETFORGE-TSET');
+    if (vpn.ike !== '1') lines.push(' set ikev2-profile NETFORGE-IKEV2-PROFILE');
     lines.push(' match address NETFORGE-VPN-ACL');
     lines.push('!');
     lines.push(`interface ${vpn.outsideIface}`);
@@ -3102,6 +3156,12 @@ function generateRouterDeviceConfig(device) {
   const bgp = deviceBgp[device.id];
   if (bgp && bgp.enabled && bgp.asNumber) {
     lines.push('! --- BGP (eBGP) ---');
+    if (bgp.defaultOnly && (bgp.neighbors || []).length > 0) {
+      lines.push('ip prefix-list PL_DEFAULT_ONLY seq 5 permit 0.0.0.0/0');
+      lines.push('route-map RM_IN_DEFAULT_ONLY permit 10');
+      lines.push(' match ip address prefix-list PL_DEFAULT_ONLY');
+      lines.push('!');
+    }
     lines.push(`router bgp ${bgp.asNumber}`);
     (bgp.networks || []).forEach(net => {
       const match = net.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
@@ -3112,6 +3172,7 @@ function generateRouterDeviceConfig(device) {
     });
     (bgp.neighbors || []).forEach(n => {
       lines.push(` neighbor ${n.ip} remote-as ${n.remoteAs}`);
+      if (bgp.defaultOnly) lines.push(` neighbor ${n.ip} route-map RM_IN_DEFAULT_ONLY in`);
     });
     if (bgp.redistOspf && ospf && ospf.enabled) {
       lines.push(` redistribute ospf ${ospf.pid}`);
@@ -3481,6 +3542,12 @@ try {
     if (fwReflexiveEl && savedState.fwReflexive) fwReflexiveEl.checked = true;
     const fwIpv6El = document.getElementById('fw-ipv6');
     if (fwIpv6El && savedState.fwIpv6) fwIpv6El.checked = true;
+    const fwZbfEl = document.getElementById('fw-zbf');
+    if (fwZbfEl && savedState.fwZbf) fwZbfEl.checked = true;
+    const fwZbfInsideEl = document.getElementById('fw-zbf-inside-if');
+    if (fwZbfInsideEl && savedState.fwZbfInsideIf) fwZbfInsideEl.value = savedState.fwZbfInsideIf;
+    const fwZbfOutsideEl = document.getElementById('fw-zbf-outside-if');
+    if (fwZbfOutsideEl && savedState.fwZbfOutsideIf) fwZbfOutsideEl.value = savedState.fwZbfOutsideIf;
   }
   if (typeof updateFwFormatFieldsVisibility === 'function') updateFwFormatFieldsVisibility();
 } catch (e) {
@@ -3999,6 +4066,80 @@ function generateCiscoAclConfig(policy, rules, reflexive, ipv6) {
   return lines.join('\n');
 }
 
+// ---- Pare-feu à zones (Zone-Based Firewall / ZBF) — approche moderne remplaçant les ACL réflexives ----
+function generateZoneBasedFirewallConfig(policy, rules, insideIf, outsideIf, ipv6) {
+  if (rules.length === 0) throw new Error("Ajoute au moins une règle avant de générer");
+  if (!insideIf || !outsideIf) throw new Error("Indique l'interface intérieure et l'interface extérieure pour le ZBF");
+
+  const addrFormat = ipv6 ? ciscoAddrFormatV6 : ciscoAddrFormat;
+  const aclKeyword = ipv6 ? 'ipv6 access-list' : 'ip access-list extended';
+  const aclName = 'NETFORGE_ZBF_ACL';
+  const acceptedRules = rules.filter(r => r.action === 'ACCEPT');
+  if (acceptedRules.length === 0) throw new Error("Aucune règle ACCEPT à autoriser entre les zones — le ZBF bloque tout par défaut, il faut au moins une règle à inspecter");
+
+  const lines = [];
+  lines.push('! === Pare-feu à zones (ZBF/ZFW) généré par NetForge ===');
+  lines.push('! Contrairement à une ACL classique, le ZBF bloque TOUT le trafic entre zones par défaut :');
+  lines.push('! seul le trafic explicitement inspecté (classe ci-dessous) est autorisé, dans les deux sens.');
+  lines.push('!');
+  lines.push('zone security IN');
+  lines.push(' description Zone interne (réseau protégé)');
+  lines.push('zone security OUT');
+  lines.push(' description Zone externe (Internet / non fiable)');
+  lines.push('!');
+
+  lines.push(`${aclKeyword} ${aclName}`);
+  acceptedRules.forEach((r, idx) => {
+    if (ipv6 && (r.source.startsWith('OG:') || r.dest.startsWith('OG:'))) {
+      lines.push(` ! ⚠ règle ${idx + 1} ignorée : object-group non disponible en mode IPv6 ici`);
+      return;
+    }
+    const src = addrFormat(r.source);
+    const dst = addrFormat(r.dest);
+    if (r.port && r.port.startsWith('SVCOG:')) {
+      lines.push(` permit object-group ${r.port.slice(6)} ${src} ${dst}`);
+      return;
+    }
+    const proto = r.proto === 'any' ? (ipv6 ? 'ipv6' : 'ip') : r.proto;
+    const ports = r.port ? r.port.split(',').map(p => p.trim()) : [null];
+    ports.forEach(port => {
+      let line = ` permit ${proto} ${src} ${dst}`;
+      if (port) line += ` eq ${port}`;
+      if (proto === 'icmp' && r.icmpType && icmpTypeCisco[r.icmpType]) line += ` ${icmpTypeCisco[r.icmpType]}`;
+      lines.push(line);
+    });
+  });
+  lines.push('!');
+
+  lines.push('class-map type inspect match-any NETFORGE_ZBF_CLASS');
+  lines.push(` match access-group name ${aclName}`);
+  lines.push('!');
+
+  lines.push('policy-map type inspect NETFORGE_ZBF_POLICY');
+  lines.push(' class type inspect NETFORGE_ZBF_CLASS');
+  lines.push('  inspect');
+  lines.push(' class class-default');
+  lines.push(`  ${policy === 'ACCEPT' ? 'pass' : 'drop log'}`);
+  lines.push('!');
+
+  lines.push('zone-pair security NETFORGE_ZP_IN_OUT source IN destination OUT');
+  lines.push(' service-policy type inspect NETFORGE_ZBF_POLICY');
+  lines.push('!');
+  lines.push('! Le trafic retour (OUT vers IN) est automatiquement autorisé par "inspect" — pas besoin de zone-pair symétrique.');
+  lines.push('! Pour autoriser aussi des connexions initiées depuis OUT vers IN (ex: serveur publié), créer un second');
+  lines.push('! zone-pair (source OUT destination IN) avec sa propre policy-map dédiée.');
+  lines.push('!');
+
+  lines.push(`interface ${insideIf}`);
+  lines.push(' zone-member security IN');
+  lines.push('!');
+  lines.push(`interface ${outsideIf}`);
+  lines.push(' zone-member security OUT');
+  lines.push('!');
+
+  return lines.join('\n');
+}
+
 const fwBtn = document.getElementById('fw-btn');
 const fwError = document.getElementById('fw-error');
 const fwOutputBox = document.getElementById('fw-output-box');
@@ -4011,10 +4152,18 @@ fwBtn.addEventListener('click', () => {
     const policy = document.getElementById('fw-policy').value;
     const format = document.getElementById('fw-format').value;
     const reflexive = document.getElementById('fw-reflexive').checked;
+    const zbf = document.getElementById('fw-zbf').checked;
     const ipv6 = document.getElementById('fw-ipv6').checked;
-    const config = format === 'cisco'
-      ? generateCiscoAclConfig(policy, fwRules, reflexive, ipv6)
-      : generateIptablesConfig(policy, fwRules);
+    let config;
+    if (format === 'cisco' && zbf) {
+      const insideIf = document.getElementById('fw-zbf-inside-if').value.trim();
+      const outsideIf = document.getElementById('fw-zbf-outside-if').value.trim();
+      config = generateZoneBasedFirewallConfig(policy, fwRules, insideIf, outsideIf, ipv6);
+    } else if (format === 'cisco') {
+      config = generateCiscoAclConfig(policy, fwRules, reflexive, ipv6);
+    } else {
+      config = generateIptablesConfig(policy, fwRules);
+    }
     fwOutput.textContent = config;
     fwOutputBox.classList.remove('hidden');
   } catch (e) {
@@ -4042,13 +4191,26 @@ document.getElementById('fw-export-btn').addEventListener('click', () => {
 function updateFwFormatFieldsVisibility() {
   const format = document.getElementById('fw-format').value;
   document.getElementById('fw-reflexive-row').style.display = format === 'cisco' ? 'flex' : 'none';
+  document.getElementById('fw-zbf-row').style.display = format === 'cisco' ? 'flex' : 'none';
+  document.getElementById('fw-zbf-zones-row').style.display = (format === 'cisco' && document.getElementById('fw-zbf').checked) ? 'flex' : 'none';
   document.getElementById('fw-ipv6-row').style.display = format === 'cisco' ? 'flex' : 'none';
 }
 updateFwFormatFieldsVisibility();
 
 document.getElementById('fw-policy').addEventListener('change', saveState);
 document.getElementById('fw-format').addEventListener('change', () => { updateFwFormatFieldsVisibility(); saveState(); });
-document.getElementById('fw-reflexive').addEventListener('change', saveState);
+document.getElementById('fw-reflexive').addEventListener('change', () => {
+  if (document.getElementById('fw-reflexive').checked) document.getElementById('fw-zbf').checked = false;
+  updateFwFormatFieldsVisibility();
+  saveState();
+});
+document.getElementById('fw-zbf').addEventListener('change', () => {
+  if (document.getElementById('fw-zbf').checked) document.getElementById('fw-reflexive').checked = false;
+  updateFwFormatFieldsVisibility();
+  saveState();
+});
+document.getElementById('fw-zbf-inside-if').addEventListener('change', saveState);
+document.getElementById('fw-zbf-outside-if').addEventListener('change', saveState);
 document.getElementById('fw-ipv6').addEventListener('change', saveState);
 
 // ---- Testeur de règles ----
