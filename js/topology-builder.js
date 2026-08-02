@@ -512,7 +512,7 @@ function adminBlockHtml() {
       </div>
       <button class="btn-add" id="dev-adm-save-btn">Enregistrer</button>
     </div>
-    <div class="hint">RADIUS chiffre uniquement le mot de passe (UDP 1812/1813) ; TACACS+ chiffre tout l'échange (TCP 49) — préféré pour l'AAA sur les équipements réseau eux-mêmes.</div>
+    <div class="hint">RADIUS chiffre uniquement le mot de passe (UDP 1812/1813) et ne fait pas d'autorisation par commande ; TACACS+ chiffre tout l'échange (TCP 49) et autorise/trace chaque commande niveau 15 — préféré pour l'AAA sur les équipements réseau eux-mêmes. Dans les deux cas, NetForge génère l'authentification, l'autorisation de session et l'accounting.</div>
   `;
 }
 
@@ -1842,11 +1842,17 @@ function generateAdminLines(device) {
       lines.push(` address ipv4 ${adm.aaaServer} auth-port 1812 acct-port 1813`);
       if (adm.aaaKey) lines.push(` key ${adm.aaaKey}`);
       lines.push('aaa authentication login default group radius local');
+      lines.push('aaa authorization exec default group radius local');
+      lines.push('aaa accounting exec default start-stop group radius');
     } else {
       lines.push('tacacs server NETFORGE-TACACS');
       lines.push(` address ipv4 ${adm.aaaServer}`);
       if (adm.aaaKey) lines.push(` key ${adm.aaaKey}`);
       lines.push('aaa authentication login default group tacacs+ local');
+      lines.push('aaa authorization exec default group tacacs+ local');
+      lines.push('aaa authorization commands 15 default group tacacs+ local');
+      lines.push('aaa accounting exec default start-stop group tacacs+');
+      lines.push('aaa accounting commands 15 default start-stop group tacacs+');
     }
   }
 

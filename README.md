@@ -65,6 +65,13 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — AAA complet : authentification + autorisation + accounting
+- La section AAA (SNMP/NTP/Syslog/AAA) génère désormais le trio complet, pas seulement l'authentification :
+  - **RADIUS** : `aaa authentication login` + `aaa authorization exec` + `aaa accounting exec start-stop` (RADIUS ne fait pas d'autorisation par commande, c'est une limite du protocole)
+  - **TACACS+** : idem + `aaa authorization commands 15` et `aaa accounting commands 15` — TACACS+ peut autoriser et tracer chaque commande niveau 15, ce que RADIUS ne sait pas faire
+- Info-bulle mise à jour pour expliquer cette différence RADIUS/TACACS+, utile pour comprendre pourquoi TACACS+ reste la référence sur l'administration des équipements réseau
+- Cache du service worker passé en v33
+
 ### 2026-08-02 — QoS sortante côté routeur (priorité voix, MQC)
 - **Nouvelle section "QoS sortante"** dans le panneau routeur, entre NAT et VPN : active une file d'attente à priorité stricte (LLQ) pour le trafic voix sur l'interface WAN choisie
 - Génère le trio classique Cisco MQC : `class-map match-all VOICE` (`match dscp ef`), `policy-map WAN-QOS` (`priority <kbps>` pour la classe voix, `fair-queue` pour le reste), et `service-policy output WAN-QOS` posé sur l'interface (physique ou sous-interface 802.1Q) réellement sélectionnée
