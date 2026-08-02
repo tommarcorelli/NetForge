@@ -65,6 +65,15 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — Sécurité réseau : port-security, DHCP Snooping/DAI, storm-control, CoPP
+- **Port-security** enfin exposé sur les ports d'accès du module Topologie (existait dans le module VLAN autonome, manquait ici, comme le VLAN voix avant) : `switchport port-security` (1 MAC, sticky, violation restrict)
+- **Storm-control broadcast** en pourcentage, optionnel, sur les ports d'accès
+- **Port fiable** (nouvelle case à cocher, pour les uplinks) : sert de base à `ip dhcp snooping trust` / `ip arp inspection trust`
+- **Nouvelle section switch "DHCP Snooping & Dynamic ARP Inspection"** : active la snooping sur tous les VLANs déclarés, DAI en option (nécessite la snooping active) — seuls les ports NON marqués fiables sont inspectés
+- **Nouvelle section routeur "Control-Plane Policing (CoPP)"** : limite le trafic de gestion légitime (SSH/SNMP/BGP/OSPF) à un débit garanti configurable, bride beaucoup plus fort tout le reste du trafic destiné au CPU — protection basique contre un flood visant le plan de contrôle
+- Testé de bout en bout (port-security + storm-control + DHCP snooping/DAI côté switch, CoPP côté routeur)
+- Cache du service worker passé en v34
+
 ### 2026-08-02 — AAA complet : authentification + autorisation + accounting
 - La section AAA (SNMP/NTP/Syslog/AAA) génère désormais le trio complet, pas seulement l'authentification :
   - **RADIUS** : `aaa authentication login` + `aaa authorization exec` + `aaa accounting exec start-stop` (RADIUS ne fait pas d'autorisation par commande, c'est une limite du protocole)

@@ -19,6 +19,8 @@ const deviceVpn = {};              // deviceId -> {enabled, peerIp, presharedKey
 const deviceSecurity = {};         // deviceId -> {enableSecret, username, userPassword, sshEnabled, domain, banner}
 const deviceAdmin = {};             // deviceId -> {snmpEnabled, snmpVersion, snmpCommunity, snmpV3User, snmpV3AuthPass, snmpV3PrivPass, snmpServer, ntpServer, ntpAuthEnabled, ntpKey, syslogServer, syslogLevel, aaaMode, aaaServer, aaaKey}
 const deviceQos = {};               // deviceId -> {enabled, trust} — switchs uniquement (frontière de confiance QoS sur les ports trunk)
+const deviceSnoop = {};             // deviceId -> {enabled, dai} — switchs uniquement (DHCP snooping + Dynamic ARP Inspection)
+const deviceCopp = {};              // deviceId -> {enabled, mgmtKbps} — routeurs uniquement (Control-Plane Policing)
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -321,6 +323,8 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
   deviceAdmin[id] = { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
   deviceQos[id] = { enabled: false, trust: 'none', wanIface: '', voiceBw: '128' };
+  deviceSnoop[id] = { enabled: false, dai: false };
+  deviceCopp[id] = { enabled: false, mgmtKbps: '512' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -355,6 +359,8 @@ document.addEventListener('click', (e) => {
     delete deviceSecurity[id];
     delete deviceAdmin[id];
     delete deviceQos[id];
+    delete deviceSnoop[id];
+    delete deviceCopp[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -714,8 +720,32 @@ function renderDeviceConfigPanel() {
           </div>
           <button class="btn-add" id="dev-add-port-btn">+ Ajouter</button>
         </div>
+        <div class="builder-row" style="margin-top:6px;">
+          <div class="mini-field adv-checkbox" id="dev-port-security-field">
+            <label><input type="checkbox" id="dev-port-security"> Port-security (1 MAC, sticky, violation restrict)</label>
+          </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-port-trust"> Port fiable (uplink) — DHCP snooping / ARP inspection</label>
+          </div>
+          <div class="mini-field" id="dev-port-storm-field">
+            <label>Storm-control broadcast (%, optionnel)</label>
+            <input type="text" id="dev-port-storm" placeholder="ex: 20">
+          </div>
+        </div>
         <div class="hint">${topoVlanState.length === 0 ? 'Aucun VLAN déclaré — ajoute-en un dans la section VLANs ci-dessus' : ''}</div>
         <div class="port-rows" id="dev-port-rows"></div>
+
+        <div class="subsection-label">DHCP Snooping &amp; Dynamic ARP Inspection</div>
+        <div class="builder-row">
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-snoop-enabled"> Activer DHCP Snooping</label>
+          </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-dai-enabled"> Activer Dynamic ARP Inspection (DAI)</label>
+          </div>
+          <button class="btn-add" id="dev-snoop-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint">DAI s'appuie sur la table de correspondance créée par DHCP Snooping — inutile de l'activer sans lui. Les ports marqués « fiable » ci-dessus (typiquement les uplinks) ne sont pas inspectés ; tous les autres ports d'accès le sont.</div>
 
         <div class="subsection-label">EtherChannel (agrégation de liens)</div>
         <div class="builder-row">
@@ -804,8 +834,10 @@ function renderDeviceConfigPanel() {
       topoVlanState.map(v => `<option value="${v.id}">${v.id} — ${v.name}</option>`).join('');
 
     function updatePortVoiceFieldVisibility() {
-      document.getElementById('dev-port-voice-field').style.display =
-        document.getElementById('dev-port-mode').value === 'access' ? 'flex' : 'none';
+      const isAccess = document.getElementById('dev-port-mode').value === 'access';
+      document.getElementById('dev-port-voice-field').style.display = isAccess ? 'flex' : 'none';
+      document.getElementById('dev-port-security-field').style.display = isAccess ? 'flex' : 'none';
+      document.getElementById('dev-port-storm-field').style.display = isAccess ? 'flex' : 'none';
     }
     updatePortVoiceFieldVisibility();
     document.getElementById('dev-port-mode').addEventListener('change', updatePortVoiceFieldVisibility);
@@ -824,6 +856,11 @@ function renderDeviceConfigPanel() {
           const voiceInfo = topoVlanState.find(v => v.id === p.voiceVlanId) || { id: p.voiceVlanId, name: '?' };
           detail += ` + voix VLAN ${voiceInfo.id} (${voiceInfo.name})`;
         }
+        const extras = [];
+        if (p.security) extras.push('port-security');
+        if (p.trust) extras.push('fiable (snooping/DAI)');
+        if (p.storm) extras.push(`storm ${p.storm}%`);
+        if (extras.length > 0) detail += ` — ${extras.join(', ')}`;
         return `
           <div class="port-row">
             <span class="port-name">${p.port}</span>
@@ -843,18 +880,39 @@ function renderDeviceConfigPanel() {
       const vlanId = document.getElementById('dev-port-vlan').value;
       const voiceVlanId = document.getElementById('dev-port-voice').value;
       if (mode === 'access' && !vlanId) return;
+      const security = mode === 'access' ? document.getElementById('dev-port-security').checked : false;
+      const trust = document.getElementById('dev-port-trust').checked;
+      const stormRaw = mode === 'access' ? document.getElementById('dev-port-storm').value.trim() : '';
+      const storm = stormRaw && !isNaN(parseFloat(stormRaw)) ? stormRaw : null;
 
       const rows = devicePorts[selectedDeviceId];
       const ports = expandPortRange(type + num).filter(p => !rows.some(existing => existing.port === p));
       ports.forEach(port => {
-        rows.push({ port, mode, vlanId: mode === 'access' ? vlanId : null, voiceVlanId: (mode === 'access' && voiceVlanId) ? voiceVlanId : null, nativeVlanId: null, description: '', security: false });
+        rows.push({ port, mode, vlanId: mode === 'access' ? vlanId : null, voiceVlanId: (mode === 'access' && voiceVlanId) ? voiceVlanId : null, nativeVlanId: null, description: '', security, trust, storm });
       });
       document.getElementById('dev-port-name').value = '';
+      document.getElementById('dev-port-security').checked = false;
+      document.getElementById('dev-port-trust').checked = false;
+      document.getElementById('dev-port-storm').value = '';
       renderDevPortRows();
       saveState();
     });
 
     renderDevPortRows();
+
+    // ---- DHCP Snooping & DAI ----
+    const snoop = deviceSnoop[selectedDeviceId] || { enabled: false, dai: false };
+    document.getElementById('dev-snoop-enabled').checked = snoop.enabled;
+    document.getElementById('dev-dai-enabled').checked = snoop.dai;
+
+    document.getElementById('dev-snoop-save-btn').addEventListener('click', () => {
+      deviceSnoop[selectedDeviceId] = {
+        enabled: document.getElementById('dev-snoop-enabled').checked,
+        dai: document.getElementById('dev-dai-enabled').checked
+      };
+      renderDeviceConfigPanel();
+      saveState();
+    });
 
     // ---- EtherChannel ----
     const ecVlanSelect = document.getElementById('dev-ec-vlan');
@@ -917,6 +975,19 @@ function renderDeviceConfigPanel() {
         <div class="device-config-title">Configuration — ${device.name} (routeur)</div>
         ${securityBlockHtml()}
         ${adminBlockHtml()}
+
+        <div class="subsection-label">Control-Plane Policing (CoPP)</div>
+        <div class="builder-row">
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-copp-enabled"> Activer CoPP basique</label>
+          </div>
+          <div class="mini-field">
+            <label>Débit garanti — gestion (SSH/SNMP/BGP) en kbps</label>
+            <input type="text" id="dev-copp-bw" placeholder="512">
+          </div>
+          <button class="btn-add" id="dev-copp-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint">Protège le CPU du routeur : le trafic de gestion légitime (SSH, SNMP, BGP) est limité au débit indiqué, tout le reste destiné au plan de contrôle est bridé beaucoup plus fort — utile contre un flood visant à saturer le processeur.</div>
 
         <div class="subsection-label">Interfaces</div>
         <div class="builder-row">
@@ -1238,6 +1309,18 @@ function renderDeviceConfigPanel() {
 
     wireSecurityBlock();
     wireAdminBlock();
+
+    const copp = deviceCopp[selectedDeviceId] || { enabled: false, mgmtKbps: '512' };
+    document.getElementById('dev-copp-enabled').checked = copp.enabled;
+    document.getElementById('dev-copp-bw').value = copp.mgmtKbps || '512';
+    document.getElementById('dev-copp-save-btn').addEventListener('click', () => {
+      deviceCopp[selectedDeviceId] = {
+        enabled: document.getElementById('dev-copp-enabled').checked,
+        mgmtKbps: document.getElementById('dev-copp-bw').value.trim() || '512'
+      };
+      renderDeviceConfigPanel();
+      saveState();
+    });
 
     const devIfVlan = document.getElementById('dev-if-vlan');
     devIfVlan.innerHTML = topoVlanState.length === 0

@@ -90,6 +90,7 @@ const STATE_SHAPE = {
   deviceVtp: 'object', deviceWifi: 'object', deviceStp: 'object',
   deviceVpn: 'object', deviceSecurity: 'object',
   deviceAdmin: 'object', deviceQos: 'object',
+  deviceSnoop: 'object', deviceCopp: 'object',
   deviceIdSeq: 'number',
   fwPolicy: 'string', dnsZoneName: 'string', dnsPrimaryNs: 'string', dnsAdminEmail: 'string', fwFormat: 'string',
   fwZbfInsideIf: 'string', fwZbfOutsideIf: 'string',
@@ -193,6 +194,8 @@ function applyStateSnapshot(json) {
   replaceDict(deviceSecurity, sanitized.deviceSecurity);
   replaceDict(deviceAdmin, sanitized.deviceAdmin);
   replaceDict(deviceQos, sanitized.deviceQos);
+  replaceDict(deviceSnoop, sanitized.deviceSnoop);
+  replaceDict(deviceCopp, sanitized.deviceCopp);
   links = sanitized.links || [];
   deviceIdSeq = sanitized.deviceIdSeq || 1;
   fwRules = sanitized.fwRules || [];
@@ -307,6 +310,8 @@ function saveState() {
       deviceSecurity: typeof deviceSecurity !== 'undefined' ? deviceSecurity : {},
       deviceAdmin: typeof deviceAdmin !== 'undefined' ? deviceAdmin : {},
       deviceQos: typeof deviceQos !== 'undefined' ? deviceQos : {},
+      deviceSnoop: typeof deviceSnoop !== 'undefined' ? deviceSnoop : {},
+      deviceCopp: typeof deviceCopp !== 'undefined' ? deviceCopp : {},
       links: typeof links !== 'undefined' ? links : [],
       deviceIdSeq: typeof deviceIdSeq !== 'undefined' ? deviceIdSeq : 1,
       fwRules: typeof fwRules !== 'undefined' ? fwRules : [],

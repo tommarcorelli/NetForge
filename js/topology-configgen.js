@@ -12,6 +12,18 @@ function generateSwitchDeviceConfig(device) {
     lines.push('!');
   }
 
+  const snoop = deviceSnoop[device.id];
+  if (snoop && snoop.enabled && topoVlanState.length > 0) {
+    lines.push('! --- DHCP Snooping & Dynamic ARP Inspection ---');
+    lines.push('ip dhcp snooping');
+    lines.push(`ip dhcp snooping vlan ${topoVlanState.map(v => v.id).join(',')}`);
+    lines.push('no ip dhcp snooping information option');
+    if (snoop.dai) {
+      lines.push(`ip arp inspection vlan ${topoVlanState.map(v => v.id).join(',')}`);
+    }
+    lines.push('!');
+  }
+
   const vtp = deviceVtp[device.id];
   if (vtp && vtp.mode !== 'off' && vtp.domain) {
     lines.push('! --- VTP ---');
@@ -59,6 +71,17 @@ function generateSwitchDeviceConfig(device) {
         lines.push(` switchport voice vlan ${p.voiceVlanId}`);
         if (qos && qos.enabled) lines.push(' mls qos trust device cisco-phone');
       }
+      if (p.security) {
+        lines.push(' switchport port-security');
+        lines.push(' switchport port-security maximum 1');
+        lines.push(' switchport port-security violation restrict');
+        lines.push(' switchport port-security mac-address sticky');
+      }
+      if (snoop && snoop.enabled && p.trust) {
+        lines.push(' ip dhcp snooping trust');
+        if (snoop.dai) lines.push(' ip arp inspection trust');
+      }
+      if (p.storm) lines.push(` storm-control broadcast level ${p.storm}`);
       lines.push(' spanning-tree portfast');
       if (stp && stp.bpduGuard) lines.push(' spanning-tree bpduguard enable');
       lines.push('!');
@@ -74,6 +97,10 @@ function generateSwitchDeviceConfig(device) {
       lines.push(` switchport trunk allowed vlan ${topoVlanState.map(v => v.id).join(',')}`);
       if (stp && stp.rootGuard) lines.push(' spanning-tree guard root');
       if (qos && qos.enabled && qos.trust !== 'none') lines.push(` mls qos trust ${qos.trust}`);
+      if (snoop && snoop.enabled && p.trust) {
+        lines.push(' ip dhcp snooping trust');
+        if (snoop.dai) lines.push(' ip arp inspection trust');
+      }
       lines.push('!');
     });
   }
@@ -112,6 +139,30 @@ function generateRouterDeviceConfig(device) {
   lines.push(...generateAdminLines(device));
   lines.push('ip routing');
   lines.push('!');
+
+  const copp = deviceCopp[device.id];
+  if (copp && copp.enabled) {
+    const bw = copp.mgmtKbps || '512';
+    lines.push('! --- Control-Plane Policing (CoPP) ---');
+    lines.push('ip access-list extended COPP-MGMT-ACL');
+    lines.push(' permit tcp any any eq 22');
+    lines.push(' permit udp any any eq 161');
+    lines.push(' permit tcp any any eq 179');
+    lines.push(' permit ospf any any');
+    lines.push('!');
+    lines.push('class-map match-all COPP-MGMT');
+    lines.push(' match access-group name COPP-MGMT-ACL');
+    lines.push('!');
+    lines.push('policy-map COPP-POLICY');
+    lines.push(' class COPP-MGMT');
+    lines.push(`  police ${parseInt(bw, 10) * 1000} conform-action transmit exceed-action drop`);
+    lines.push(' class class-default');
+    lines.push('  police 8000 conform-action transmit exceed-action drop');
+    lines.push('!');
+    lines.push('control-plane');
+    lines.push(' service-policy input COPP-POLICY');
+    lines.push('!');
+  }
 
   const rqos = deviceQos[device.id];
   const rqosActive = rqos && rqos.enabled && rqos.wanIface;
@@ -690,6 +741,8 @@ try {
     if (savedState.deviceSecurity) Object.assign(deviceSecurity, savedState.deviceSecurity);
     if (savedState.deviceAdmin) Object.assign(deviceAdmin, savedState.deviceAdmin);
     if (savedState.deviceQos) Object.assign(deviceQos, savedState.deviceQos);
+    if (savedState.deviceSnoop) Object.assign(deviceSnoop, savedState.deviceSnoop);
+    if (savedState.deviceCopp) Object.assign(deviceCopp, savedState.deviceCopp);
     if (savedState.links) links = savedState.links;
     if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
   }
