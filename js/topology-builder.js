@@ -17,6 +17,8 @@ const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vl
 const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard}
 const deviceVpn = {};              // deviceId -> {enabled, peerIp, presharedKey, localNetwork, remoteNetwork, outsideIface, encryption, hash, dhGroup}
 const deviceSecurity = {};         // deviceId -> {enableSecret, username, userPassword, sshEnabled, domain, banner}
+const deviceAdmin = {};             // deviceId -> {snmpEnabled, snmpVersion, snmpCommunity, snmpV3User, snmpV3AuthPass, snmpV3PrivPass, snmpServer, ntpServer, ntpAuthEnabled, ntpKey, syslogServer, syslogLevel, aaaMode, aaaServer, aaaKey}
+const deviceQos = {};               // deviceId -> {enabled, trust} — switchs uniquement (frontière de confiance QoS sur les ports trunk)
 
 const deviceList = document.getElementById('device-list');
 const deviceConfigPanel = document.getElementById('device-config-panel');
@@ -316,6 +318,8 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
   deviceVpn[id] = { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
+  deviceAdmin[id] = { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
+  deviceQos[id] = { enabled: false, trust: 'none' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -348,6 +352,8 @@ document.addEventListener('click', (e) => {
     delete deviceStp[id];
     delete deviceVpn[id];
     delete deviceSecurity[id];
+    delete deviceAdmin[id];
+    delete deviceQos[id];
     links = links.filter(l => l.a !== id && l.b !== id);
     if (selectedDeviceId === id) selectedDeviceId = null;
     renderDeviceList();
@@ -422,6 +428,189 @@ function wireSecurityBlock() {
   });
 }
 
+function adminBlockHtml() {
+  return `
+    <div class="subsection-label">Administration &amp; supervision</div>
+    <div class="builder-row">
+      <div class="mini-field adv-checkbox">
+        <label><input type="checkbox" id="dev-adm-snmp-enabled"> SNMP</label>
+      </div>
+      <div class="mini-field">
+        <label>Version</label>
+        <select id="dev-adm-snmp-version">
+          <option value="2c">v2c</option>
+          <option value="3">v3</option>
+        </select>
+      </div>
+      <div class="mini-field grow" id="dev-adm-snmp-community-field">
+        <label>Communauté (v2c, lecture seule)</label>
+        <input type="text" id="dev-adm-snmp-community" placeholder="public">
+      </div>
+      <div class="mini-field grow" id="dev-adm-snmp-v3user-field" style="display:none;">
+        <label>Utilisateur v3</label>
+        <input type="text" id="dev-adm-snmp-v3user" placeholder="admin">
+      </div>
+      <div class="mini-field grow" id="dev-adm-snmp-v3auth-field" style="display:none;">
+        <label>Mot de passe auth (SHA)</label>
+        <input type="text" id="dev-adm-snmp-v3auth" placeholder="">
+      </div>
+      <div class="mini-field grow" id="dev-adm-snmp-v3priv-field" style="display:none;">
+        <label>Mot de passe chiffrement (AES)</label>
+        <input type="text" id="dev-adm-snmp-v3priv" placeholder="">
+      </div>
+      <div class="mini-field grow">
+        <label>Serveur de supervision (hôte SNMP)</label>
+        <input type="text" id="dev-adm-snmp-server" placeholder="192.168.1.10">
+      </div>
+    </div>
+    <div class="builder-row" style="margin-top:10px;">
+      <div class="mini-field grow">
+        <label>Serveur NTP</label>
+        <input type="text" id="dev-adm-ntp-server" placeholder="192.168.1.1">
+      </div>
+      <div class="mini-field adv-checkbox">
+        <label><input type="checkbox" id="dev-adm-ntp-auth"> Authentifier NTP (MD5)</label>
+      </div>
+      <div class="mini-field grow" id="dev-adm-ntp-key-field" style="display:none;">
+        <label>Clé NTP</label>
+        <input type="text" id="dev-adm-ntp-key" placeholder="">
+      </div>
+    </div>
+    <div class="builder-row" style="margin-top:10px;">
+      <div class="mini-field grow">
+        <label>Serveur Syslog</label>
+        <input type="text" id="dev-adm-syslog-server" placeholder="192.168.1.20">
+      </div>
+      <div class="mini-field">
+        <label>Niveau (trap)</label>
+        <select id="dev-adm-syslog-level">
+          <option value="7">debugging (7)</option>
+          <option value="6">informational (6)</option>
+          <option value="5">notifications (5)</option>
+          <option value="4">warnings (4)</option>
+          <option value="3">errors (3)</option>
+        </select>
+      </div>
+    </div>
+    <div class="builder-row" style="margin-top:10px;">
+      <div class="mini-field">
+        <label>AAA (authentification centralisée)</label>
+        <select id="dev-adm-aaa-mode">
+          <option value="local">Local uniquement</option>
+          <option value="radius">RADIUS</option>
+          <option value="tacacs">TACACS+</option>
+        </select>
+      </div>
+      <div class="mini-field grow" id="dev-adm-aaa-server-field" style="display:none;">
+        <label>Serveur AAA</label>
+        <input type="text" id="dev-adm-aaa-server" placeholder="192.168.1.30">
+      </div>
+      <div class="mini-field grow" id="dev-adm-aaa-key-field" style="display:none;">
+        <label>Clé partagée</label>
+        <input type="text" id="dev-adm-aaa-key" placeholder="">
+      </div>
+      <button class="btn-add" id="dev-adm-save-btn">Enregistrer</button>
+    </div>
+    <div class="hint">RADIUS chiffre uniquement le mot de passe (UDP 1812/1813) ; TACACS+ chiffre tout l'échange (TCP 49) — préféré pour l'AAA sur les équipements réseau eux-mêmes.</div>
+  `;
+}
+
+function updateAdminFieldVisibility() {
+  const snmpV3 = document.getElementById('dev-adm-snmp-version').value === '3';
+  document.getElementById('dev-adm-snmp-community-field').style.display = snmpV3 ? 'none' : 'flex';
+  document.getElementById('dev-adm-snmp-v3user-field').style.display = snmpV3 ? 'flex' : 'none';
+  document.getElementById('dev-adm-snmp-v3auth-field').style.display = snmpV3 ? 'flex' : 'none';
+  document.getElementById('dev-adm-snmp-v3priv-field').style.display = snmpV3 ? 'flex' : 'none';
+
+  document.getElementById('dev-adm-ntp-key-field').style.display = document.getElementById('dev-adm-ntp-auth').checked ? 'flex' : 'none';
+
+  const aaaOn = document.getElementById('dev-adm-aaa-mode').value !== 'local';
+  document.getElementById('dev-adm-aaa-server-field').style.display = aaaOn ? 'flex' : 'none';
+  document.getElementById('dev-adm-aaa-key-field').style.display = aaaOn ? 'flex' : 'none';
+}
+
+function wireAdminBlock() {
+  const adm = deviceAdmin[selectedDeviceId] || { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
+  document.getElementById('dev-adm-snmp-enabled').checked = adm.snmpEnabled;
+  document.getElementById('dev-adm-snmp-version').value = adm.snmpVersion;
+  document.getElementById('dev-adm-snmp-community').value = adm.snmpCommunity;
+  document.getElementById('dev-adm-snmp-v3user').value = adm.snmpV3User;
+  document.getElementById('dev-adm-snmp-v3auth').value = adm.snmpV3AuthPass;
+  document.getElementById('dev-adm-snmp-v3priv').value = adm.snmpV3PrivPass;
+  document.getElementById('dev-adm-snmp-server').value = adm.snmpServer;
+  document.getElementById('dev-adm-ntp-server').value = adm.ntpServer;
+  document.getElementById('dev-adm-ntp-auth').checked = adm.ntpAuthEnabled;
+  document.getElementById('dev-adm-ntp-key').value = adm.ntpKey;
+  document.getElementById('dev-adm-syslog-server').value = adm.syslogServer;
+  document.getElementById('dev-adm-syslog-level').value = adm.syslogLevel;
+  document.getElementById('dev-adm-aaa-mode').value = adm.aaaMode;
+  document.getElementById('dev-adm-aaa-server').value = adm.aaaServer;
+  document.getElementById('dev-adm-aaa-key').value = adm.aaaKey;
+
+  updateAdminFieldVisibility();
+  document.getElementById('dev-adm-snmp-version').addEventListener('change', updateAdminFieldVisibility);
+  document.getElementById('dev-adm-ntp-auth').addEventListener('change', updateAdminFieldVisibility);
+  document.getElementById('dev-adm-aaa-mode').addEventListener('change', updateAdminFieldVisibility);
+
+  document.getElementById('dev-adm-save-btn').addEventListener('click', () => {
+    deviceAdmin[selectedDeviceId] = {
+      snmpEnabled: document.getElementById('dev-adm-snmp-enabled').checked,
+      snmpVersion: document.getElementById('dev-adm-snmp-version').value,
+      snmpCommunity: document.getElementById('dev-adm-snmp-community').value.trim(),
+      snmpV3User: document.getElementById('dev-adm-snmp-v3user').value.trim(),
+      snmpV3AuthPass: document.getElementById('dev-adm-snmp-v3auth').value.trim(),
+      snmpV3PrivPass: document.getElementById('dev-adm-snmp-v3priv').value.trim(),
+      snmpServer: document.getElementById('dev-adm-snmp-server').value.trim(),
+      ntpServer: document.getElementById('dev-adm-ntp-server').value.trim(),
+      ntpAuthEnabled: document.getElementById('dev-adm-ntp-auth').checked,
+      ntpKey: document.getElementById('dev-adm-ntp-key').value.trim(),
+      syslogServer: document.getElementById('dev-adm-syslog-server').value.trim(),
+      syslogLevel: document.getElementById('dev-adm-syslog-level').value,
+      aaaMode: document.getElementById('dev-adm-aaa-mode').value,
+      aaaServer: document.getElementById('dev-adm-aaa-server').value.trim(),
+      aaaKey: document.getElementById('dev-adm-aaa-key').value.trim()
+    };
+    renderDeviceConfigPanel();
+    saveState();
+  });
+}
+
+function qosBlockHtml() {
+  return `
+    <div class="subsection-label">QoS (frontière de confiance)</div>
+    <div class="builder-row">
+      <div class="mini-field adv-checkbox">
+        <label><input type="checkbox" id="dev-qos-enabled"> Activer QoS (mls qos)</label>
+      </div>
+      <div class="mini-field grow">
+        <label>Confiance sur les ports trunk (liaisons montantes)</label>
+        <select id="dev-qos-trust">
+          <option value="none">Aucune (marquage remis à 0 par défaut)</option>
+          <option value="cos">Faire confiance au CoS (802.1p)</option>
+          <option value="dscp">Faire confiance au DSCP</option>
+        </select>
+      </div>
+      <button class="btn-add" id="dev-qos-save-btn">Enregistrer</button>
+    </div>
+    <div class="hint">Frontière de confiance classique : les ports d'accès (postes) ne sont jamais fiables par défaut, seules les liaisons montantes trunk vers un autre switch/routeur le sont.</div>
+  `;
+}
+
+function wireQosBlock() {
+  const qos = deviceQos[selectedDeviceId] || { enabled: false, trust: 'none' };
+  document.getElementById('dev-qos-enabled').checked = qos.enabled;
+  document.getElementById('dev-qos-trust').value = qos.trust;
+
+  document.getElementById('dev-qos-save-btn').addEventListener('click', () => {
+    deviceQos[selectedDeviceId] = {
+      enabled: document.getElementById('dev-qos-enabled').checked,
+      trust: document.getElementById('dev-qos-trust').value
+    };
+    renderDeviceConfigPanel();
+    saveState();
+  });
+}
+
 function renderDeviceConfigPanel() {
   if (!selectedDeviceId) {
     deviceConfigPanel.innerHTML = '';
@@ -435,6 +624,7 @@ function renderDeviceConfigPanel() {
       <div class="device-config">
         <div class="device-config-title">Configuration — ${device.name} (switch)</div>
         ${securityBlockHtml()}
+        ${adminBlockHtml()}
 
         <div class="subsection-label">VTP (VLAN Trunking Protocol)</div>
         <div class="builder-row">
@@ -490,6 +680,8 @@ function renderDeviceConfigPanel() {
           <button class="btn-add" id="dev-stp-save-btn">Enregistrer</button>
         </div>
         <div class="hint" id="dev-stp-hint">Priorité basse (ex: 4096, 8192) = plus de chances de devenir root bridge. Par défaut Cisco : 32768.</div>
+
+        ${qosBlockHtml()}
 
         <div class="builder-row">
           <div class="mini-field">
@@ -558,6 +750,8 @@ function renderDeviceConfigPanel() {
     `;
 
     wireSecurityBlock();
+    wireAdminBlock();
+    wireQosBlock();
 
     // ---- VTP ----
     const vtp = deviceVtp[selectedDeviceId] || { mode: 'off', domain: '', version: '2', password: '' };
@@ -701,6 +895,7 @@ function renderDeviceConfigPanel() {
       <div class="device-config">
         <div class="device-config-title">Configuration — ${device.name} (routeur)</div>
         ${securityBlockHtml()}
+        ${adminBlockHtml()}
 
         <div class="subsection-label">Interfaces</div>
         <div class="builder-row">
@@ -1004,6 +1199,7 @@ function renderDeviceConfigPanel() {
     `;
 
     wireSecurityBlock();
+    wireAdminBlock();
 
     const devIfVlan = document.getElementById('dev-if-vlan');
     devIfVlan.innerHTML = topoVlanState.length === 0
@@ -1538,6 +1734,66 @@ function generateSecurityLines(device) {
     lines.push('!');
   }
 
+  return lines;
+}
+
+function generateAdminLines(device) {
+  const adm = deviceAdmin[device.id];
+  if (!adm) return [];
+  const lines = [];
+
+  if (adm.snmpEnabled) {
+    if (adm.snmpVersion === '3') {
+      lines.push('snmp-server group NETFORGE-GRP v3 priv');
+      if (adm.snmpV3User) {
+        lines.push(`snmp-server user ${adm.snmpV3User} NETFORGE-GRP v3 auth sha ${adm.snmpV3AuthPass || '<A_DEFINIR>'} priv aes 128 ${adm.snmpV3PrivPass || '<A_DEFINIR>'}`);
+      }
+      if (adm.snmpServer && adm.snmpV3User) {
+        lines.push(`snmp-server host ${adm.snmpServer} version 3 priv ${adm.snmpV3User}`);
+      }
+    } else {
+      lines.push(`snmp-server community ${adm.snmpCommunity || 'public'} RO`);
+      if (adm.snmpServer) {
+        lines.push(`snmp-server host ${adm.snmpServer} version 2c ${adm.snmpCommunity || 'public'}`);
+      }
+    }
+  }
+
+  if (adm.ntpServer) {
+    if (adm.ntpAuthEnabled && adm.ntpKey) {
+      lines.push('ntp authenticate');
+      lines.push(`ntp authentication-key 1 md5 ${adm.ntpKey}`);
+      lines.push('ntp trusted-key 1');
+      lines.push(`ntp server ${adm.ntpServer} key 1`);
+    } else {
+      lines.push(`ntp server ${adm.ntpServer}`);
+    }
+  }
+
+  if (adm.syslogServer) {
+    lines.push(`logging host ${adm.syslogServer}`);
+    lines.push(`logging trap ${adm.syslogLevel || '6'}`);
+  }
+
+  if (adm.aaaMode !== 'local' && adm.aaaServer) {
+    lines.push('aaa new-model');
+    if (adm.aaaMode === 'radius') {
+      lines.push('radius server NETFORGE-RADIUS');
+      lines.push(` address ipv4 ${adm.aaaServer} auth-port 1812 acct-port 1813`);
+      if (adm.aaaKey) lines.push(` key ${adm.aaaKey}`);
+      lines.push('aaa authentication login default group radius local');
+    } else {
+      lines.push('tacacs server NETFORGE-TACACS');
+      lines.push(` address ipv4 ${adm.aaaServer}`);
+      if (adm.aaaKey) lines.push(` key ${adm.aaaKey}`);
+      lines.push('aaa authentication login default group tacacs+ local');
+    }
+  }
+
+  if (lines.length > 0) {
+    lines.unshift('! --- Administration & supervision (SNMP/NTP/Syslog/AAA) ---');
+    lines.push('!');
+  }
   return lines;
 }
 

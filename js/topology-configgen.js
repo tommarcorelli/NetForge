@@ -3,6 +3,14 @@ function generateSwitchDeviceConfig(device) {
   lines.push(`! === ${device.name} (switch) — généré par NetForge ===`);
   lines.push('!');
   lines.push(...generateSecurityLines(device));
+  lines.push(...generateAdminLines(device));
+
+  const qos = deviceQos[device.id];
+  if (qos && qos.enabled) {
+    lines.push('! --- QoS ---');
+    lines.push('mls qos');
+    lines.push('!');
+  }
 
   const vtp = deviceVtp[device.id];
   if (vtp && vtp.mode !== 'off' && vtp.domain) {
@@ -61,6 +69,7 @@ function generateSwitchDeviceConfig(device) {
       lines.push(' switchport mode trunk');
       lines.push(` switchport trunk allowed vlan ${topoVlanState.map(v => v.id).join(',')}`);
       if (stp && stp.rootGuard) lines.push(' spanning-tree guard root');
+      if (qos && qos.enabled && qos.trust !== 'none') lines.push(` mls qos trust ${qos.trust}`);
       lines.push('!');
     });
   }
@@ -96,6 +105,7 @@ function generateRouterDeviceConfig(device) {
   lines.push(`! === ${device.name} (routeur) — généré par NetForge ===`);
   lines.push('!');
   lines.push(...generateSecurityLines(device));
+  lines.push(...generateAdminLines(device));
   lines.push('ip routing');
   lines.push('!');
 
@@ -656,6 +666,8 @@ try {
     if (savedState.deviceStp) Object.assign(deviceStp, savedState.deviceStp);
     if (savedState.deviceVpn) Object.assign(deviceVpn, savedState.deviceVpn);
     if (savedState.deviceSecurity) Object.assign(deviceSecurity, savedState.deviceSecurity);
+    if (savedState.deviceAdmin) Object.assign(deviceAdmin, savedState.deviceAdmin);
+    if (savedState.deviceQos) Object.assign(deviceQos, savedState.deviceQos);
     if (savedState.links) links = savedState.links;
     if (savedState.deviceIdSeq) deviceIdSeq = savedState.deviceIdSeq;
   }

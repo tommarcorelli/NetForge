@@ -13,7 +13,7 @@ Fournir en un seul outil plusieurs générateurs de fichiers de config réseau, 
 | Subnetting / VLSM | ✅ V2 disponible | Calcul de plan d'adressage + découpage VLSM multi-sous-réseaux + binaire + type d'adresse + référence CIDR + résumé de route (agrégation) + calculateur IPv6 |
 | VLAN | ✅ V2 disponible | Génération de config switch Cisco IOS (VLANs, ports accès, ports trunk, SVI, voice VLAN, port-security, DHCP snooping, storm-control) |
 | Firewall / ACL | ✅ V2 disponible | Génération iptables ou ACL Cisco, réorganisation, presets, testeur de règles, time-range, rate-limit, ACL réflexives (stateful) |
-| **Topologie** | ✅ V2 disponible | Multi-équipements (switchs + routeurs + PC/serveurs), router-on-a-stick, DHCP, OSPF, BGP, NAT (1:1 + redirection de port), sauvegarde auto, export ZIP |
+| **Topologie** | ✅ V3 disponible | Multi-équipements (switchs + routeurs + PC/serveurs), router-on-a-stick, DHCP, OSPF, BGP, NAT (1:1 + redirection de port), administration & supervision (SNMP/NTP/Syslog/AAA), QoS, sauvegarde auto, export ZIP |
 | **DNS** | ✅ V2 disponible | Génération de zone BIND (A, CNAME, MX, NS, PTR, TXT, SRV) + génération automatique de zone inverse |
 
 ## Structure du projet
@@ -64,6 +64,16 @@ python -m http.server 8000
 Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
+
+### 2026-08-02 — Administration & supervision (SNMP/NTP/Syslog/AAA) + QoS
+- **Nouvelle section "Administration & supervision"** dans le panneau de chaque équipement (switch et routeur) de Topologie :
+  - **SNMP** : v2c (communauté en lecture seule) ou v3 (utilisateur + authentification SHA + chiffrement AES), avec déclaration du serveur de supervision (`snmp-server host`)
+  - **NTP** : serveur de temps, avec authentification MD5 optionnelle (`ntp authenticate` / `ntp authentication-key` / `ntp trusted-key`)
+  - **Syslog** : serveur distant + niveau de sévérité des traps (`logging host` / `logging trap`)
+  - **AAA** : authentification centralisée RADIUS ou TACACS+ (serveur + clé partagée), avec repli sur les comptes locaux (`aaa authentication login default group ... local`)
+- **Nouvelle section QoS** dans le panneau switch : frontière de confiance classique — `mls qos` global, puis confiance CoS ou DSCP appliquée uniquement sur les ports trunk (liaisons montantes), jamais sur les ports d'accès
+- Tout est persistant (sauvegarde automatique, undo/redo, export/import JSON) comme le reste de Topologie
+- Cache du service worker passé en v30
 
 ### 2026-07-22 — Découpage de app.js en plusieurs fichiers (sans build)
 - `js/app.js` (200 Ko, ~4700 lignes) est remplacé par **8 fichiers séparés** dans `js/` (`core.js`, `subnetting.js`, `vlan.js`, `topology-builder.js`, `topology-configgen.js`, `firewall.js`, `dns.js`, `actions.js`), chargés via plusieurs balises `<script src>` classiques — pas de build, pas de Node, pas de `fetch()` : fonctionne en `file://` comme en HTTP
