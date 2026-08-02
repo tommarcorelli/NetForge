@@ -113,10 +113,26 @@ function generateRouterDeviceConfig(device) {
   lines.push('ip routing');
   lines.push('!');
 
+  const rqos = deviceQos[device.id];
+  const rqosActive = rqos && rqos.enabled && rqos.wanIface;
+  if (rqosActive) {
+    lines.push('! --- QoS sortante (MQC, priorité voix) ---');
+    lines.push('class-map match-all VOICE');
+    lines.push(' match dscp ef');
+    lines.push('!');
+    lines.push('policy-map WAN-QOS');
+    lines.push(' class VOICE');
+    lines.push(`  priority ${rqos.voiceBw || '128'}`);
+    lines.push(' class class-default');
+    lines.push('  fair-queue');
+    lines.push('!');
+  }
+
   const ifaces = deviceInterfaces[device.id] || [];
   ifaces.forEach(iface => {
     const [ip, cidr] = iface.ip.split('/');
     const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
+    const fullName = iface.sub ? `${iface.name}.${iface.vlanId}` : iface.name;
     if (iface.sub) {
       lines.push(`interface ${iface.name}.${iface.vlanId}`);
       lines.push(` encapsulation dot1Q ${iface.vlanId}`);
@@ -128,6 +144,7 @@ function generateRouterDeviceConfig(device) {
         if (red.priority) lines.push(` ${kw} ${red.group} priority ${red.priority}`);
         if (red.preempt) lines.push(` ${kw} ${red.group} preempt`);
       }
+      if (rqosActive && rqos.wanIface === fullName) lines.push(' service-policy output WAN-QOS');
       lines.push(' no shutdown');
     } else {
       lines.push(`interface ${iface.name}`);
@@ -146,6 +163,7 @@ function generateRouterDeviceConfig(device) {
         if (red.priority) lines.push(` ${kw} ${red.group} priority ${red.priority}`);
         if (red.preempt) lines.push(` ${kw} ${red.group} preempt`);
       }
+      if (rqosActive && rqos.wanIface === fullName) lines.push(' service-policy output WAN-QOS');
       lines.push(' no shutdown');
     }
     lines.push('!');

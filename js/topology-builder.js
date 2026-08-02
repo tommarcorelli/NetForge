@@ -320,7 +320,7 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceVpn[id] = { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
   deviceAdmin[id] = { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
-  deviceQos[id] = { enabled: false, trust: 'none' };
+  deviceQos[id] = { enabled: false, trust: 'none', wanIface: '', voiceBw: '128' };
 
   nameInput.value = '';
   selectedDeviceId = id;
@@ -1147,6 +1147,23 @@ function renderDeviceConfigPanel() {
         </div>
         <div class="port-rows" id="dev-nat-static-rows"></div>
 
+        <div class="subsection-label">QoS sortante (priorité voix)</div>
+        <div class="builder-row">
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-rqos-enabled"> Activer QoS (MQC)</label>
+          </div>
+          <div class="mini-field grow">
+            <label>Interface WAN de sortie</label>
+            <select id="dev-rqos-iface"></select>
+          </div>
+          <div class="mini-field">
+            <label>Bande passante voix garantie (kbps)</label>
+            <input type="text" id="dev-rqos-bw" placeholder="128">
+          </div>
+          <button class="btn-add" id="dev-rqos-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint">File d'attente à priorité stricte (LLQ) pour le trafic marqué DSCP EF (voix), classe par défaut en fair-queue pour le reste — le marquage doit déjà être fiable en amont (frontière de confiance QoS sur le switch d'accès).</div>
+
         <div class="subsection-label">VPN Site-à-Site (IPsec)</div>
         <div class="builder-row">
           <div class="mini-field">
@@ -1459,6 +1476,28 @@ function renderDeviceConfigPanel() {
     const nat = deviceNat[selectedDeviceId] || { patEnabled: false, outsideIface: '', staticMappings: [] };
     document.getElementById('dev-nat-enabled').value = nat.patEnabled ? 'yes' : 'no';
     if (nat.outsideIface) natOutsideSelect.value = nat.outsideIface;
+
+    // ---- QoS sortante (routeur) ----
+    const rqosIfaceSelect = document.getElementById('dev-rqos-iface');
+    rqosIfaceSelect.innerHTML = ifaceFullNames.length === 0
+      ? '<option value="">— aucune interface avec IP —</option>'
+      : ifaceFullNames.map(name => `<option value="${name}">${name}</option>`).join('');
+
+    const rqos = deviceQos[selectedDeviceId] || { enabled: false, trust: 'none', wanIface: '', voiceBw: '128' };
+    document.getElementById('dev-rqos-enabled').checked = rqos.enabled;
+    document.getElementById('dev-rqos-bw').value = rqos.voiceBw || '128';
+    if (rqos.wanIface) rqosIfaceSelect.value = rqos.wanIface;
+
+    document.getElementById('dev-rqos-save-btn').addEventListener('click', () => {
+      deviceQos[selectedDeviceId] = {
+        ...(deviceQos[selectedDeviceId] || {}),
+        enabled: document.getElementById('dev-rqos-enabled').checked,
+        wanIface: rqosIfaceSelect.value,
+        voiceBw: document.getElementById('dev-rqos-bw').value.trim() || '128'
+      };
+      renderDeviceConfigPanel();
+      saveState();
+    });
 
     function renderNatStaticRows() {
       const box = document.getElementById('dev-nat-static-rows');

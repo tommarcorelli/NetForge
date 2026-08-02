@@ -65,6 +65,12 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — QoS sortante côté routeur (priorité voix, MQC)
+- **Nouvelle section "QoS sortante"** dans le panneau routeur, entre NAT et VPN : active une file d'attente à priorité stricte (LLQ) pour le trafic voix sur l'interface WAN choisie
+- Génère le trio classique Cisco MQC : `class-map match-all VOICE` (`match dscp ef`), `policy-map WAN-QOS` (`priority <kbps>` pour la classe voix, `fair-queue` pour le reste), et `service-policy output WAN-QOS` posé sur l'interface (physique ou sous-interface 802.1Q) réellement sélectionnée
+- Complète la chaîne QoS de bout en bout avec la frontière de confiance déjà en place côté switch (VLAN voix → `mls qos trust device cisco-phone`) : le switch fait confiance au marquage DSCP posé par le téléphone, le routeur priorise ensuite ce trafic en sortie WAN
+- Cache du service worker passé en v32
+
 ### 2026-08-02 — VLAN voix sur les ports d'accès de Topologie + confiance QoS téléphone IP
 - **VLAN voix** enfin exposé sur les ports d'accès du module Topologie (existait déjà dans le module VLAN autonome, manquait ici) : sélecteur optionnel à l'ajout d'un port en mode accès, génère `switchport voice vlan X` en plus de `switchport access vlan Y`
 - Si **QoS activé** sur le switch : `mls qos trust device cisco-phone` ajouté automatiquement sur les ports ayant un VLAN voix — le port fait confiance au marquage QoS uniquement s'il vient bien d'un téléphone Cisco identifié via CDP, pas d'un PC qui usurperait le marquage
