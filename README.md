@@ -14,7 +14,7 @@ Fournir en un seul outil plusieurs générateurs de fichiers de config réseau, 
 | VLAN | ✅ V2 disponible | Génération de config switch Cisco IOS (VLANs, ports accès, ports trunk, SVI, voice VLAN, port-security, DHCP snooping, storm-control) |
 | Firewall / ACL | ✅ V2 disponible | Génération iptables ou ACL Cisco, réorganisation, presets, testeur de règles, time-range, rate-limit, ACL réflexives (stateful) |
 | **Topologie** | ✅ V3 disponible | Multi-équipements (switchs + routeurs + PC/serveurs), router-on-a-stick, DHCP, OSPF, BGP, NAT (1:1 + redirection de port), administration & supervision (SNMP/NTP/Syslog/AAA), QoS, sauvegarde auto, export ZIP |
-| **DNS** | ✅ V2 disponible | Génération de zone BIND (A, CNAME, MX, NS, PTR, TXT, SRV) + génération automatique de zone inverse |
+| **DNS** | ✅ V3 disponible | Génération de zone BIND (A, AAAA, CNAME, MX, NS, PTR, TXT, SRV, CAA) + génération automatique de zone inverse (in-addr.arpa **et** ip6.arpa) |
 
 ## Structure du projet
 
@@ -64,6 +64,13 @@ python -m http.server 8000
 Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
+
+### 2026-08-02 — IPv6 dans le module DNS (AAAA + zone inverse ip6.arpa)
+- Premier volet de la piste "IPv6 partout" : **enregistrement AAAA** ajouté au générateur de zone directe, à côté du A
+- **Génération automatique de zone inverse IPv6** : le même champ "Réseau" détecte s'il s'agit d'IPv4 (`192.168.10.0/24`) ou d'IPv6 (`2001:db8:10::/64`) et route vers le bon générateur — nommage nibble par nibble en `ip6.arpa`, préfixe multiple de 4 requis (mêmes limites pédagogiques que la délégation classless en IPv4)
+- Réutilise le parseur IPv6 déjà présent dans le module Subnetting (`parseIPv6ToBigInt`) — aucune duplication de logique d'adressage
+- Testé de bout en bout (zone directe AAAA + zone inverse ip6.arpa avec nibbles vérifiés à la main)
+- Cache du service worker passé en v35
 
 ### 2026-08-02 — Sécurité réseau : port-security, DHCP Snooping/DAI, storm-control, CoPP
 - **Port-security** enfin exposé sur les ports d'accès du module Topologie (existait dans le module VLAN autonome, manquait ici, comme le VLAN voix avant) : `switchport port-security` (1 MAC, sticky, violation restrict)

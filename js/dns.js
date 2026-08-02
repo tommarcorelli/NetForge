@@ -3,6 +3,7 @@
 // ==================================================================
 const dnsValueLabels = {
   A: 'Adresse IP',
+  AAAA: 'Adresse IPv6',
   CNAME: 'Cible (nom canonique)',
   MX: 'Serveur mail',
   NS: 'Serveur de noms',
@@ -121,6 +122,9 @@ function generateDnsZone(zoneName, primaryNs, adminEmail, records) {
       case 'A':
         lines.push(`${r.name}   IN  A       ${r.value}`);
         break;
+      case 'AAAA':
+        lines.push(`${r.name}   IN  AAAA    ${r.value}`);
+        break;
       case 'CNAME':
         lines.push(`${r.name}   IN  CNAME   ${r.value}.`);
         break;
@@ -199,6 +203,58 @@ function generateReverseZone(reverseNetInput, zoneName, primaryNs, adminEmail, r
   return { zoneText: lines.join('\n'), arpaZone };
 }
 
+// ---- Génération automatique de la zone inverse IPv6 (ip6.arpa) depuis les enregistrements AAAA ----
+function generateReverseZoneV6(reverseNetInput, zoneName, primaryNs, adminEmail, records) {
+  const match = reverseNetInput.trim().match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/);
+  if (!match) throw new Error("Indique un préfixe IPv6 valide, ex : 2001:db8:10::/64");
+  const cidr = parseInt(match[2], 10);
+  if (cidr < 4 || cidr > 124 || cidr % 4 !== 0) throw new Error("Pour une zone inverse ip6.arpa simple, utilise un préfixe multiple de 4 (ex : /48, /52, /56, /60, /64)");
+
+  const big = parseIPv6ToBigInt(match[1]);
+  if (big === null) throw new Error("Adresse IPv6 invalide");
+
+  const nibbleCount = cidr / 4;
+  const shift = BigInt(128 - cidr);
+  const netBig = (big >> shift) << shift;
+  const netHex = netBig.toString(16).padStart(32, '0');
+  const prefixNibbles = netHex.slice(0, nibbleCount).split('').reverse();
+  const arpaZone = `${prefixNibbles.join('.')}.ip6.arpa`;
+
+  const aaaaRecords = records.filter(r => r.type === 'AAAA');
+  if (aaaaRecords.length === 0) throw new Error("Aucun enregistrement AAAA trouvé — ajoute-en dans la zone directe ci-dessus pour générer la zone inverse");
+
+  const fqdnBase = zoneName ? `.${zoneName}` : '';
+  const matching = aaaaRecords
+    .map(r => ({ r, rBig: parseIPv6ToBigInt(r.value.trim()) }))
+    .filter(x => x.rBig !== null && (x.rBig >> shift) === (netBig >> shift));
+  if (matching.length === 0) throw new Error(`Aucun enregistrement AAAA n'appartient au préfixe ${reverseNetInput}`);
+
+  const now = new Date();
+  const serial = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}01`;
+
+  const lines = [];
+  lines.push(`; === Zone inverse IPv6 (PTR) pour ${reverseNetInput} — générée par NetForge ===`);
+  lines.push('$TTL 86400');
+  lines.push(`@   IN  SOA   ${primaryNs || 'ns1.' + (zoneName || 'local')}. ${adminEmail || 'admin.' + (zoneName || 'local')}. (`);
+  lines.push(`        ${serial} ; serial (yyyymmddnn)`);
+  lines.push('        3600       ; refresh');
+  lines.push('        1800       ; retry');
+  lines.push('        604800     ; expire');
+  lines.push('        86400 )    ; minimum TTL');
+  lines.push('');
+  lines.push(`@   IN  NS    ${primaryNs || 'ns1.' + (zoneName || 'local')}.`);
+  lines.push('');
+
+  matching.forEach(({ r, rBig }) => {
+    const hex = rBig.toString(16).padStart(32, '0');
+    const hostNibbles = hex.slice(nibbleCount).split('').reverse();
+    const fqdn = r.name === '@' ? (zoneName || r.name) : `${r.name}${fqdnBase}`;
+    lines.push(`${hostNibbles.join('.')}   IN  PTR     ${fqdn}.`);
+  });
+
+  return { zoneText: lines.join('\n'), arpaZone };
+}
+
 const dnsBtn = document.getElementById('dns-btn');
 const dnsError = document.getElementById('dns-error');
 const dnsOutputBox = document.getElementById('dns-output-box');
@@ -253,7 +309,9 @@ dnsReverseBtn.addEventListener('click', () => {
     const zoneName = document.getElementById('dns-zone-name').value.trim();
     const primaryNs = document.getElementById('dns-primary-ns').value.trim();
     const adminEmail = document.getElementById('dns-admin-email').value.trim();
-    const { zoneText, arpaZone } = generateReverseZone(reverseNet, zoneName, primaryNs, adminEmail, dnsRecords);
+    const { zoneText, arpaZone } = reverseNet.includes(':')
+      ? generateReverseZoneV6(reverseNet, zoneName, primaryNs, adminEmail, dnsRecords)
+      : generateReverseZone(reverseNet, zoneName, primaryNs, adminEmail, dnsRecords);
     dnsReverseOutput.textContent = zoneText;
     lastReverseArpaZone = arpaZone;
     dnsReverseOutputBox.classList.remove('hidden');
