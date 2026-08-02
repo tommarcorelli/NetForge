@@ -13,6 +13,7 @@ const portRows = document.getElementById('port-rows');
 const newVlanId = document.getElementById('new-vlan-id');
 const newVlanName = document.getElementById('new-vlan-name');
 const newVlanSvi = document.getElementById('new-vlan-svi');
+const newVlanSvi6 = document.getElementById('new-vlan-svi6');
 const newPortName = document.getElementById('new-port-name');
 const newPortMode = document.getElementById('new-port-mode');
 const newPortVlan = document.getElementById('new-port-vlan');
@@ -58,7 +59,7 @@ function renderVlanChips() {
   } else {
     vlanChips.innerHTML = vlanState.map((v, idx) => `
       <div class="chip">
-        <span class="chip-id">${v.id}</span> — ${v.name}${v.svi ? ` <span class="port-detail-extra">(SVI ${v.svi})</span>` : ''}
+        <span class="chip-id">${v.id}</span> — ${v.name}${v.svi ? ` <span class="port-detail-extra">(SVI ${v.svi})</span>` : ''}${v.svi6 ? ` <span class="port-detail-extra">(SVI6 ${v.svi6})</span>` : ''}
         <button class="chip-remove" data-remove-vlan="${idx}" title="Retirer">&times;</button>
       </div>
     `).join('');
@@ -67,11 +68,13 @@ function renderVlanChips() {
   saveState();
 }
 
-function addVlan(id, name, svi) {
+function addVlan(id, name, svi, svi6) {
   if (!/^\d+$/.test(id)) return false;
   if (vlanState.some(v => v.id === id)) return false;
   if (svi && !svi.match(/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/)) return false;
-  vlanState.push({ id, name: name || `VLAN${id}`, svi: svi || null });
+  if (svi6 && parseIPv6ToBigInt(svi6.split('/')[0]) === null) return false;
+  if (svi6 && !svi6.match(/\/\d{1,3}$/)) return false;
+  vlanState.push({ id, name: name || `VLAN${id}`, svi: svi || null, svi6: svi6 || null });
   renderVlanChips();
   renderPortRows();
   return true;
@@ -135,10 +138,12 @@ document.getElementById('add-vlan-btn').addEventListener('click', () => {
   const id = newVlanId.value.trim() || (/^\d+$/.test(newVlanId.placeholder) ? newVlanId.placeholder : '');
   const name = newVlanName.value.trim();
   const svi = newVlanSvi.value.trim();
-  if (!addVlan(id, name, svi)) { newVlanId.focus(); return; }
+  const svi6 = newVlanSvi6.value.trim();
+  if (!addVlan(id, name, svi, svi6)) { newVlanId.focus(); return; }
   newVlanId.value = '';
   newVlanName.value = '';
   newVlanSvi.value = '';
+  newVlanSvi6.value = '';
   newVlanId.focus();
 });
 
@@ -229,15 +234,23 @@ function generateVlanConfig() {
     lines.push('no ip dhcp snooping information option');
   }
 
-  const svisConfigured = vlanState.filter(v => v.svi);
+  const svisConfigured = vlanState.filter(v => v.svi || v.svi6);
   if (svisConfigured.length > 0) {
     lines.push('!');
+    if (vlanState.some(v => v.svi6)) {
+      lines.push('ipv6 unicast-routing');
+    }
     lines.push('! --- Interfaces virtuelles (SVI) ---');
     svisConfigured.forEach(v => {
-      const [ip, cidr] = v.svi.split('/');
-      const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
       lines.push(`interface vlan ${v.id}`);
-      lines.push(` ip address ${ip} ${mask}`);
+      if (v.svi) {
+        const [ip, cidr] = v.svi.split('/');
+        const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
+        lines.push(` ip address ${ip} ${mask}`);
+      }
+      if (v.svi6) {
+        lines.push(` ipv6 address ${v.svi6}`);
+      }
       lines.push(' no shutdown');
       lines.push('!');
     });

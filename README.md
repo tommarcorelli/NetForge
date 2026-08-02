@@ -65,6 +65,15 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — IPv6 dans Topologie (adressage routeur + OSPFv3) et VLAN (SVI)
+- Piste "IPv6 partout" continuée volontairement même si le scénario type ne l'utilise pas forcément — pour que l'outil reste correct le jour où il faut du dual-stack
+- **Interfaces routeur** (Topologie) : champ IPv6/préfixe optionnel à côté de l'IPv4 existant → `ipv6 address X` généré, `ipv6 unicast-routing` posé automatiquement dès qu'une interface porte une adresse v6
+- **OSPFv3** : si OSPF est activé sur le routeur, chaque interface IPv6 reçoit `ipv6 ospf <processus> area <zone>` (modèle par interface, conforme à la syntaxe IOS OSPFv3, contrairement à OSPFv2 qui reste par network statement) + bloc global `ipv6 router ospf <processus>`
+- **SVI IPv6** (module VLAN autonome) : un VLAN peut désormais avoir une IP SVI v4, une IPv6, les deux, ou aucune — `ipv6 unicast-routing` posé si au moins un SVI v6 existe
+- Réutilise le parseur IPv6 du module Subnetting (`parseIPv6ToBigInt`), aucune duplication de logique d'adressage
+- Testé de bout en bout (SVI IPv6, interface routeur dual-stack + OSPFv3 générés et vérifiés)
+- Cache du service worker passé en v36
+
 ### 2026-08-02 — IPv6 dans le module DNS (AAAA + zone inverse ip6.arpa)
 - Premier volet de la piste "IPv6 partout" : **enregistrement AAAA** ajouté au générateur de zone directe, à côté du A
 - **Génération automatique de zone inverse IPv6** : le même champ "Réseau" détecte s'il s'agit d'IPv4 (`192.168.10.0/24`) ou d'IPv6 (`2001:db8:10::/64`) et route vers le bon générateur — nommage nibble par nibble en `ip6.arpa`, préfixe multiple de 4 requis (mêmes limites pédagogiques que la délégation classless en IPv4)

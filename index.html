@@ -306,9 +306,13 @@
               <label>IP SVI (optionnel)</label>
               <input type="text" id="new-vlan-svi" placeholder="10.0.10.1/24">
             </div>
+            <div class="mini-field grow">
+              <label>IPv6 SVI (optionnel)</label>
+              <input type="text" id="new-vlan-svi6" placeholder="2001:db8:10::1/64">
+            </div>
             <button class="btn-add" id="add-vlan-btn">+ Ajouter</button>
           </div>
-          <div class="hint">L'IP SVI n'est utile que sur un switch de niveau 3 (routage inter-VLAN)</div>
+          <div class="hint">L'IP SVI n'est utile que sur un switch de niveau 3 (routage inter-VLAN) — un VLAN peut avoir les deux, un seul, ou aucun</div>
           <div class="chips" id="vlan-chips"></div>
         </div>
 

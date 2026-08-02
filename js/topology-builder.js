@@ -1020,6 +1020,10 @@ function renderDeviceConfigPanel() {
             <label>IP / CIDR</label>
             <input type="text" id="dev-if-ip" placeholder="10.0.10.1/24">
           </div>
+          <div class="mini-field grow">
+            <label>IPv6 / préfixe (optionnel)</label>
+            <input type="text" id="dev-if-ip6" placeholder="2001:db8:10::1/64">
+          </div>
           <button class="btn-add" id="dev-add-if-btn">+ Ajouter</button>
         </div>
 
@@ -1361,6 +1365,7 @@ function renderDeviceConfigPanel() {
       box.innerHTML = rows.map((iface, idx) => {
         const label = iface.sub ? `${iface.name}.${iface.vlanId}` : iface.name;
         let detail = iface.sub ? `sous-interface VLAN ${iface.vlanId} — ${iface.ip}` : iface.ip;
+        if (iface.ip6) detail += ` + ${iface.ip6}`;
         if (iface.name.startsWith('Se')) {
           const extras = [`encap. ${iface.encapsulation || 'hdlc'}`];
           if (iface.clockrate) extras.push(`clock ${iface.clockrate}`);
@@ -1405,13 +1410,18 @@ function renderDeviceConfigPanel() {
       const sub = document.getElementById('dev-if-sub').value === 'yes';
       const vlanId = document.getElementById('dev-if-vlan').value;
       const ipRaw = document.getElementById('dev-if-ip').value.trim();
+      const ip6Raw = document.getElementById('dev-if-ip6').value.trim();
       if (!num || !ipRaw) return;
       if (sub && !vlanId) return;
       const match = ipRaw.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
       if (!match) return;
+      if (ip6Raw) {
+        const m6 = ip6Raw.match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/);
+        if (!m6 || parseIPv6ToBigInt(m6[1]) === null) return;
+      }
 
       const name = type + num;
-      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, description: '' };
+      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, ip6: ip6Raw || null, description: '' };
 
       if (type === 'Se') {
         entry.encapsulation = document.getElementById('dev-if-encap').value;
@@ -1437,6 +1447,7 @@ function renderDeviceConfigPanel() {
       deviceInterfaces[selectedDeviceId].push(entry);
       document.getElementById('dev-if-name').value = '';
       document.getElementById('dev-if-ip').value = '';
+      document.getElementById('dev-if-ip6').value = '';
       document.getElementById('dev-if-clockrate').value = '';
       document.getElementById('dev-if-bandwidth').value = '';
       document.getElementById('dev-if-dhcp').checked = false;

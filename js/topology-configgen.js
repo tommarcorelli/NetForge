@@ -138,6 +138,8 @@ function generateRouterDeviceConfig(device) {
   lines.push(...generateSecurityLines(device));
   lines.push(...generateAdminLines(device));
   lines.push('ip routing');
+  const anyIpv6 = (deviceInterfaces[device.id] || []).some(i => i.ip6);
+  if (anyIpv6) lines.push('ipv6 unicast-routing');
   lines.push('!');
 
   const copp = deviceCopp[device.id];
@@ -180,6 +182,7 @@ function generateRouterDeviceConfig(device) {
   }
 
   const ifaces = deviceInterfaces[device.id] || [];
+  const ospf = deviceOspf[device.id];
   ifaces.forEach(iface => {
     const [ip, cidr] = iface.ip.split('/');
     const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
@@ -188,6 +191,10 @@ function generateRouterDeviceConfig(device) {
       lines.push(`interface ${iface.name}.${iface.vlanId}`);
       lines.push(` encapsulation dot1Q ${iface.vlanId}`);
       lines.push(` ip address ${ip} ${mask}`);
+      if (iface.ip6) {
+        lines.push(` ipv6 address ${iface.ip6}`);
+        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${ospf.area}`);
+      }
       if (iface.redundancy && iface.redundancy.protocol && iface.redundancy.vip) {
         const red = iface.redundancy;
         const kw = red.protocol === 'hsrp' ? 'standby' : 'vrrp';
@@ -200,6 +207,10 @@ function generateRouterDeviceConfig(device) {
     } else {
       lines.push(`interface ${iface.name}`);
       lines.push(` ip address ${ip} ${mask}`);
+      if (iface.ip6) {
+        lines.push(` ipv6 address ${iface.ip6}`);
+        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${ospf.area}`);
+      }
       if (iface.name.startsWith('Se')) {
         if (iface.encapsulation && iface.encapsulation !== 'hdlc') {
           lines.push(` encapsulation ${iface.encapsulation}`);
@@ -357,7 +368,6 @@ function generateRouterDeviceConfig(device) {
     lines.push('!');
   }
 
-  const ospf = deviceOspf[device.id];
   if (ospf && ospf.enabled) {
     const ipIfaces = ifaces.filter(iface => iface.ip);
     if (ipIfaces.length > 0) {
@@ -376,6 +386,13 @@ function generateRouterDeviceConfig(device) {
       }
       lines.push('!');
     }
+  }
+
+  if (ospf && ospf.enabled && anyIpv6) {
+    lines.push('! --- OSPFv3 (IPv6) ---');
+    lines.push(`ipv6 router ospf ${ospf.pid}`);
+    lines.push('! Router-id explicite requis si l\'équipement ne porte aucune adresse IPv4 : router-id A.B.C.D');
+    lines.push('!');
   }
 
   const bgp = deviceBgp[device.id];

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'netforge-v35';
+const CACHE_NAME = 'netforge-v36';
 const ASSETS = [
   './',
   './index.html',
