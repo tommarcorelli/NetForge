@@ -1024,8 +1024,13 @@ function renderDeviceConfigPanel() {
             <label>IPv6 / préfixe (optionnel)</label>
             <input type="text" id="dev-if-ip6" placeholder="2001:db8:10::1/64">
           </div>
+          <div class="mini-field">
+            <label>Zone OSPF (optionnel)</label>
+            <input type="text" id="dev-if-ospf-area" placeholder="par défaut">
+          </div>
           <button class="btn-add" id="dev-add-if-btn">+ Ajouter</button>
         </div>
+        <div class="hint">Laisser vide = zone par défaut du routeur (section OSPF plus bas). Renseigner une zone différente ici permet de faire de ce routeur un ABR entre plusieurs zones OSPF.</div>
 
         <div class="advanced-row hidden" id="dev-if-serial-fields">
           <div class="adv-field">
@@ -1146,8 +1151,13 @@ function renderDeviceConfigPanel() {
             <label>AS distant</label>
             <input type="text" id="dev-bgp-neighbor-as" placeholder="65002">
           </div>
+          <div class="mini-field">
+            <label>Préférence locale (optionnel)</label>
+            <input type="text" id="dev-bgp-neighbor-localpref" placeholder="ex: 200">
+          </div>
           <button class="btn-add" id="dev-bgp-add-neighbor-btn">+ Ajouter voisin</button>
         </div>
+        <div class="hint">La préférence locale (défaut 100) n'est utile que si le routeur a plusieurs voisins eBGP vers l'extérieur : plus elle est haute, plus la route reçue de ce voisin est préférée pour sortir du réseau — c'est le tout premier critère de sélection de chemin BGP.</div>
         <div class="port-rows" id="dev-bgp-neighbor-rows"></div>
         <div class="builder-row">
           <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
@@ -1366,6 +1376,7 @@ function renderDeviceConfigPanel() {
         const label = iface.sub ? `${iface.name}.${iface.vlanId}` : iface.name;
         let detail = iface.sub ? `sous-interface VLAN ${iface.vlanId} — ${iface.ip}` : iface.ip;
         if (iface.ip6) detail += ` + ${iface.ip6}`;
+        if (iface.ospfArea) detail += ` — <span class="port-detail-extra">zone OSPF ${iface.ospfArea}</span>`;
         if (iface.name.startsWith('Se')) {
           const extras = [`encap. ${iface.encapsulation || 'hdlc'}`];
           if (iface.clockrate) extras.push(`clock ${iface.clockrate}`);
@@ -1421,7 +1432,8 @@ function renderDeviceConfigPanel() {
       }
 
       const name = type + num;
-      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, ip6: ip6Raw || null, description: '' };
+      const ospfAreaRaw = document.getElementById('dev-if-ospf-area').value.trim();
+      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, ip6: ip6Raw || null, ospfArea: ospfAreaRaw || null, description: '' };
 
       if (type === 'Se') {
         entry.encapsulation = document.getElementById('dev-if-encap').value;
@@ -1448,6 +1460,7 @@ function renderDeviceConfigPanel() {
       document.getElementById('dev-if-name').value = '';
       document.getElementById('dev-if-ip').value = '';
       document.getElementById('dev-if-ip6').value = '';
+      document.getElementById('dev-if-ospf-area').value = '';
       document.getElementById('dev-if-clockrate').value = '';
       document.getElementById('dev-if-bandwidth').value = '';
       document.getElementById('dev-if-dhcp').checked = false;
@@ -1518,7 +1531,7 @@ function renderDeviceConfigPanel() {
       }
       rows.innerHTML = list.map((n, idx) => `
         <div class="port-row">
-          <span class="port-detail">${n.ip} — AS distant ${n.remoteAs}</span>
+          <span class="port-detail">${n.ip} — AS distant ${n.remoteAs}${n.localPref ? ` — local-pref ${n.localPref}` : ''}</span>
           <button class="chip-remove" data-remove-bgp-neighbor="${idx}" title="Retirer">&times;</button>
         </div>
       `).join('');
@@ -1528,11 +1541,14 @@ function renderDeviceConfigPanel() {
     document.getElementById('dev-bgp-add-neighbor-btn').addEventListener('click', () => {
       const ip = document.getElementById('dev-bgp-neighbor-ip').value.trim();
       const remoteAs = document.getElementById('dev-bgp-neighbor-as').value.trim();
+      const localPrefRaw = document.getElementById('dev-bgp-neighbor-localpref').value.trim();
+      const localPref = localPrefRaw && /^\d+$/.test(localPrefRaw) ? localPrefRaw : null;
       if (!ip || !remoteAs || ipToInt(ip) === null) return;
       if (!deviceBgp[selectedDeviceId]) deviceBgp[selectedDeviceId] = { enabled: false, asNumber: '', networks: [], neighbors: [] };
-      deviceBgp[selectedDeviceId].neighbors.push({ ip, remoteAs });
+      deviceBgp[selectedDeviceId].neighbors.push({ ip, remoteAs, localPref });
       document.getElementById('dev-bgp-neighbor-ip').value = '';
       document.getElementById('dev-bgp-neighbor-as').value = '';
+      document.getElementById('dev-bgp-neighbor-localpref').value = '';
       renderBgpNeighborRows();
       saveState();
     });

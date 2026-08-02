@@ -193,7 +193,7 @@ function generateRouterDeviceConfig(device) {
       lines.push(` ip address ${ip} ${mask}`);
       if (iface.ip6) {
         lines.push(` ipv6 address ${iface.ip6}`);
-        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${ospf.area}`);
+        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${iface.ospfArea || ospf.area}`);
       }
       if (iface.redundancy && iface.redundancy.protocol && iface.redundancy.vip) {
         const red = iface.redundancy;
@@ -209,7 +209,7 @@ function generateRouterDeviceConfig(device) {
       lines.push(` ip address ${ip} ${mask}`);
       if (iface.ip6) {
         lines.push(` ipv6 address ${iface.ip6}`);
-        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${ospf.area}`);
+        if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${iface.ospfArea || ospf.area}`);
       }
       if (iface.name.startsWith('Se')) {
         if (iface.encapsulation && iface.encapsulation !== 'hdlc') {
@@ -378,7 +378,7 @@ function generateRouterDeviceConfig(device) {
         const maskInt = maskFromCidr(parseInt(cidr, 10));
         const networkAddr = intToIp((ipToInt(ip) & maskInt) >>> 0);
         const wildcard = intToIp((~maskInt) >>> 0);
-        lines.push(` network ${networkAddr} ${wildcard} area ${ospf.area}`);
+        lines.push(` network ${networkAddr} ${wildcard} area ${iface.ospfArea || ospf.area}`);
       });
       const bgpForRedist = deviceBgp[device.id];
       if (ospf.redistBgp && bgpForRedist && bgpForRedist.enabled && bgpForRedist.asNumber) {
@@ -400,10 +400,15 @@ function generateRouterDeviceConfig(device) {
     lines.push('! --- BGP (eBGP) ---');
     if (bgp.defaultOnly && (bgp.neighbors || []).length > 0) {
       lines.push('ip prefix-list PL_DEFAULT_ONLY seq 5 permit 0.0.0.0/0');
-      lines.push('route-map RM_IN_DEFAULT_ONLY permit 10');
-      lines.push(' match ip address prefix-list PL_DEFAULT_ONLY');
-      lines.push('!');
     }
+    (bgp.neighbors || []).forEach(n => {
+      if (!bgp.defaultOnly && !n.localPref) return;
+      const rmName = `RM_IN_${n.ip.replace(/\./g, '_')}`;
+      lines.push(`route-map ${rmName} permit 10`);
+      if (bgp.defaultOnly) lines.push(' match ip address prefix-list PL_DEFAULT_ONLY');
+      if (n.localPref) lines.push(` set local-preference ${n.localPref}`);
+      lines.push('!');
+    });
     lines.push(`router bgp ${bgp.asNumber}`);
     (bgp.networks || []).forEach(net => {
       const match = net.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
@@ -414,7 +419,9 @@ function generateRouterDeviceConfig(device) {
     });
     (bgp.neighbors || []).forEach(n => {
       lines.push(` neighbor ${n.ip} remote-as ${n.remoteAs}`);
-      if (bgp.defaultOnly) lines.push(` neighbor ${n.ip} route-map RM_IN_DEFAULT_ONLY in`);
+      if (bgp.defaultOnly || n.localPref) {
+        lines.push(` neighbor ${n.ip} route-map RM_IN_${n.ip.replace(/\./g, '_')} in`);
+      }
     });
     if (bgp.redistOspf && ospf && ospf.enabled) {
       lines.push(` redistribute ospf ${ospf.pid}`);

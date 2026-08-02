@@ -65,6 +65,12 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — OSPF multi-zone + préférence de chemin BGP (local-preference)
+- Dernière piste de la liste attaquée : **OSPF multi-zone**. Chaque interface routeur a maintenant un champ "Zone OSPF" optionnel qui remplace la zone par défaut du routeur — permet de transformer un routeur en ABR entre plusieurs zones, `network ... area X` (OSPFv2) et `ipv6 ospf ... area X` (OSPFv3) respectent l'override par interface
+- **BGP — préférence locale (local-preference)** par voisin : premier critère de sélection de chemin BGP, utile pour préférer un fournisseur sur un autre. Se combine proprement avec le filtrage "route par défaut uniquement" déjà existant — un seul route-map généré par voisin regroupant les deux réglages actifs sur ce voisin
+- Testé de bout en bout (interface avec zone OSPF différente de la zone par défaut du routeur, deux voisins BGP avec des combinaisons différentes de préférence locale / filtrage)
+- Cache du service worker passé en v37
+
 ### 2026-08-02 — IPv6 dans Topologie (adressage routeur + OSPFv3) et VLAN (SVI)
 - Piste "IPv6 partout" continuée volontairement même si le scénario type ne l'utilise pas forcément — pour que l'outil reste correct le jour où il faut du dual-stack
 - **Interfaces routeur** (Topologie) : champ IPv6/préfixe optionnel à côté de l'IPv4 existant → `ipv6 address X` généré, `ipv6 unicast-routing` posé automatiquement dès qu'une interface porte une adresse v6
