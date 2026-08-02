@@ -55,6 +55,10 @@ function generateSwitchDeviceConfig(device) {
       lines.push(`interface ${p.port}`);
       lines.push(' switchport mode access');
       lines.push(` switchport access vlan ${p.vlanId}`);
+      if (p.voiceVlanId) {
+        lines.push(` switchport voice vlan ${p.voiceVlanId}`);
+        if (qos && qos.enabled) lines.push(' mls qos trust device cisco-phone');
+      }
       lines.push(' spanning-tree portfast');
       if (stp && stp.bpduGuard) lines.push(' spanning-tree bpduguard enable');
       lines.push('!');

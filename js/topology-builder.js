@@ -195,6 +195,7 @@ function removeTopoVlanAt(idx) {
   topoVlanState.splice(idx, 1);
   Object.keys(devicePorts).forEach(devId => {
     devicePorts[devId] = devicePorts[devId].filter(p => p.vlanId !== removedId);
+    devicePorts[devId].forEach(p => { if (p.voiceVlanId === removedId) p.voiceVlanId = null; });
   });
   Object.keys(deviceInterfaces).forEach(devId => {
     deviceInterfaces[devId] = deviceInterfaces[devId].filter(i => !(i.sub && i.vlanId === removedId));
@@ -226,7 +227,7 @@ document.getElementById('load-preset-btn').addEventListener('click', () => {
   devicePorts.dev1 = [];
   devicePorts.dev2 = [
     { port: 'Fa0/1', mode: 'access', vlanId: '10', voiceVlanId: null, nativeVlanId: null, description: 'Poste admin', security: false },
-    { port: 'Fa0/2', mode: 'access', vlanId: '20', voiceVlanId: null, nativeVlanId: null, description: 'Poste data', security: false },
+    { port: 'Fa0/2', mode: 'access', vlanId: '20', voiceVlanId: '30', nativeVlanId: null, description: 'Poste data + tél. IP', security: false },
     { port: 'Gi0/1', mode: 'trunk', vlanId: null, voiceVlanId: null, nativeVlanId: null, description: 'Vers R1', security: false }
   ];
   devicePorts.dev3 = [];
@@ -707,6 +708,10 @@ function renderDeviceConfigPanel() {
             <label>VLAN</label>
             <select id="dev-port-vlan"></select>
           </div>
+          <div class="mini-field grow" id="dev-port-voice-field">
+            <label>VLAN voix (optionnel, ports accès)</label>
+            <select id="dev-port-voice"></select>
+          </div>
           <button class="btn-add" id="dev-add-port-btn">+ Ajouter</button>
         </div>
         <div class="hint">${topoVlanState.length === 0 ? 'Aucun VLAN déclaré — ajoute-en un dans la section VLANs ci-dessus' : ''}</div>
@@ -794,6 +799,17 @@ function renderDeviceConfigPanel() {
       ? '<option value="">— aucun VLAN —</option>'
       : topoVlanState.map(v => `<option value="${v.id}">${v.id} — ${v.name}</option>`).join('');
 
+    const devPortVoice = document.getElementById('dev-port-voice');
+    devPortVoice.innerHTML = '<option value="">— aucune —</option>' +
+      topoVlanState.map(v => `<option value="${v.id}">${v.id} — ${v.name}</option>`).join('');
+
+    function updatePortVoiceFieldVisibility() {
+      document.getElementById('dev-port-voice-field').style.display =
+        document.getElementById('dev-port-mode').value === 'access' ? 'flex' : 'none';
+    }
+    updatePortVoiceFieldVisibility();
+    document.getElementById('dev-port-mode').addEventListener('change', updatePortVoiceFieldVisibility);
+
     function renderDevPortRows() {
       const rows = devicePorts[selectedDeviceId];
       const box = document.getElementById('dev-port-rows');
@@ -803,7 +819,11 @@ function renderDeviceConfigPanel() {
       }
       box.innerHTML = rows.map((p, idx) => {
         const vlanInfo = p.mode === 'access' ? (topoVlanState.find(v => v.id === p.vlanId) || { id: p.vlanId, name: '?' }) : null;
-        const detail = p.mode === 'trunk' ? 'autorise tous les VLANs déclarés' : `VLAN ${vlanInfo.id} (${vlanInfo.name})`;
+        let detail = p.mode === 'trunk' ? 'autorise tous les VLANs déclarés' : `VLAN ${vlanInfo.id} (${vlanInfo.name})`;
+        if (p.mode === 'access' && p.voiceVlanId) {
+          const voiceInfo = topoVlanState.find(v => v.id === p.voiceVlanId) || { id: p.voiceVlanId, name: '?' };
+          detail += ` + voix VLAN ${voiceInfo.id} (${voiceInfo.name})`;
+        }
         return `
           <div class="port-row">
             <span class="port-name">${p.port}</span>
@@ -821,12 +841,13 @@ function renderDeviceConfigPanel() {
       const type = document.getElementById('dev-port-type').value;
       const mode = document.getElementById('dev-port-mode').value;
       const vlanId = document.getElementById('dev-port-vlan').value;
+      const voiceVlanId = document.getElementById('dev-port-voice').value;
       if (mode === 'access' && !vlanId) return;
 
       const rows = devicePorts[selectedDeviceId];
       const ports = expandPortRange(type + num).filter(p => !rows.some(existing => existing.port === p));
       ports.forEach(port => {
-        rows.push({ port, mode, vlanId: mode === 'access' ? vlanId : null, voiceVlanId: null, nativeVlanId: null, description: '', security: false });
+        rows.push({ port, mode, vlanId: mode === 'access' ? vlanId : null, voiceVlanId: (mode === 'access' && voiceVlanId) ? voiceVlanId : null, nativeVlanId: null, description: '', security: false });
       });
       document.getElementById('dev-port-name').value = '';
       renderDevPortRows();

@@ -65,6 +65,13 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-02 — VLAN voix sur les ports d'accès de Topologie + confiance QoS téléphone IP
+- **VLAN voix** enfin exposé sur les ports d'accès du module Topologie (existait déjà dans le module VLAN autonome, manquait ici) : sélecteur optionnel à l'ajout d'un port en mode accès, génère `switchport voice vlan X` en plus de `switchport access vlan Y`
+- Si **QoS activé** sur le switch : `mls qos trust device cisco-phone` ajouté automatiquement sur les ports ayant un VLAN voix — le port fait confiance au marquage QoS uniquement s'il vient bien d'un téléphone Cisco identifié via CDP, pas d'un PC qui usurperait le marquage
+- La suppression d'un VLAN nettoie désormais aussi le champ VLAN voix des ports qui le référençaient (en plus du VLAN de données, déjà géré)
+- Scénario "⚡ Charger un exemple" mis à jour pour démontrer le VLAN voix sur le port du poste data (VLAN 30 "VOIX" existait déjà dans le preset mais n'était utilisé nulle part)
+- Cache du service worker passé en v31
+
 ### 2026-08-02 — Administration & supervision (SNMP/NTP/Syslog/AAA) + QoS
 - **Nouvelle section "Administration & supervision"** dans le panneau de chaque équipement (switch et routeur) de Topologie :
   - **SNMP** : v2c (communauté en lecture seule) ou v3 (utilisateur + authentification SHA + chiffrement AES), avec déclaration du serveur de supervision (`snmp-server host`)
