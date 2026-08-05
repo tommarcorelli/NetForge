@@ -38,9 +38,22 @@ function generateSwitchDeviceConfig(device) {
   if (stp) {
     lines.push('! --- STP ---');
     lines.push(`spanning-tree mode ${stp.mode}`);
-    if (stp.priority && topoVlanState.length > 0) {
+    if (stp.mode === 'mst') {
+      lines.push('spanning-tree mst configuration');
+      lines.push(' name NETFORGE-MST-REGION');
+      lines.push(' revision 1');
+      if (topoVlanState.length > 0) {
+        lines.push(` instance 1 vlan ${topoVlanState.map(v => v.id).join(',')}`);
+      }
+      lines.push('!');
+      if (stp.priority) {
+        lines.push(`spanning-tree mst 1 priority ${stp.priority}`);
+      }
+      lines.push('! Tous les switchs du même domaine MST doivent partager exactement le même nom de région, la même révision et le même mappage instance/VLAN.');
+    } else if (stp.priority && topoVlanState.length > 0) {
       lines.push(`spanning-tree vlan ${topoVlanState.map(v => v.id).join(',')} priority ${stp.priority}`);
     }
+    if (stp.loopGuard) lines.push('spanning-tree loopguard default');
     lines.push('!');
   }
 
@@ -183,6 +196,30 @@ function generateRouterDeviceConfig(device) {
 
   const ifaces = deviceInterfaces[device.id] || [];
   const ospf = deviceOspf[device.id];
+  const eigrp = deviceEigrp[device.id];
+  const EIGRP_KEYCHAIN_NAME = 'EIGRP-KEYS';
+  const eigrpActive = eigrp && eigrp.enabled && eigrp.asNumber;
+  if (eigrpActive && eigrp.authType === 'md5' && eigrp.authKey) {
+    lines.push('! --- Clé EIGRP (authentification MD5) ---');
+    lines.push(`key chain ${EIGRP_KEYCHAIN_NAME}`);
+    lines.push(` key ${eigrp.authKeyId || '1'}`);
+    lines.push(`  key-string ${eigrp.authKey}`);
+    lines.push('!');
+  }
+  function eigrpAuthLinesForIface() {
+    // L'authentification par interface (mode classique) ne s'applique qu'aux interfaces qui participent réellement à EIGRP (celles avec une IP, reprises dans les "network" plus bas)
+    if (!eigrpActive || eigrp.namedMode || eigrp.authType === 'none') return [];
+    if (eigrp.authType === 'md5') {
+      return [
+        ` ip authentication mode eigrp ${eigrp.asNumber} md5`,
+        ` ip authentication key-chain eigrp ${eigrp.asNumber} ${EIGRP_KEYCHAIN_NAME}`
+      ];
+    }
+    if (eigrp.authType === 'sha256' && eigrp.authKey) {
+      return [` ip authentication mode eigrp ${eigrp.asNumber} hmac-sha-256 0 ${eigrp.authKey}`];
+    }
+    return [];
+  }
   ifaces.forEach(iface => {
     const [ip, cidr] = iface.ip.split('/');
     const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
@@ -203,6 +240,7 @@ function generateRouterDeviceConfig(device) {
         if (red.preempt) lines.push(` ${kw} ${red.group} preempt`);
       }
       if (rqosActive && rqos.wanIface === fullName) lines.push(' service-policy output WAN-QOS');
+      if (eigrpActive && iface.ip) lines.push(...eigrpAuthLinesForIface());
       lines.push(' no shutdown');
     } else {
       lines.push(`interface ${iface.name}`);
@@ -226,6 +264,7 @@ function generateRouterDeviceConfig(device) {
         if (red.preempt) lines.push(` ${kw} ${red.group} preempt`);
       }
       if (rqosActive && rqos.wanIface === fullName) lines.push(' service-policy output WAN-QOS');
+      if (eigrpActive && iface.ip) lines.push(...eigrpAuthLinesForIface());
       lines.push(' no shutdown');
     }
     lines.push('!');
@@ -384,6 +423,10 @@ function generateRouterDeviceConfig(device) {
       if (ospf.redistBgp && bgpForRedist && bgpForRedist.enabled && bgpForRedist.asNumber) {
         lines.push(` redistribute bgp ${bgpForRedist.asNumber} subnets`);
       }
+      const eigrpForOspfRedist = deviceEigrp[device.id];
+      if (ospf.redistEigrp && eigrpForOspfRedist && eigrpForOspfRedist.enabled && eigrpForOspfRedist.asNumber) {
+        lines.push(` redistribute eigrp ${eigrpForOspfRedist.asNumber} subnets`);
+      }
       lines.push('!');
     }
   }
@@ -393,6 +436,75 @@ function generateRouterDeviceConfig(device) {
     lines.push(`ipv6 router ospf ${ospf.pid}`);
     lines.push('! Router-id explicite requis si l\'équipement ne porte aucune adresse IPv4 : router-id A.B.C.D');
     lines.push('!');
+  }
+
+  const EIGRP_SEED_METRIC = '10000 100 255 1 1500'; // bande passante(kbit) délai(10µs) fiabilité charge MTU — requis par Cisco pour toute route externe redistribuée
+  if (eigrp && eigrp.enabled && eigrp.asNumber) {
+    const eigrpIfaces = ifaces.filter(iface => iface.ip);
+    if (eigrpIfaces.length > 0) {
+      lines.push('! --- EIGRP ---');
+      const redistLines = [];
+      if (eigrp.redistOspf && ospf && ospf.enabled) {
+        redistLines.push(`redistribute ospf ${ospf.pid} metric ${EIGRP_SEED_METRIC}`);
+      }
+      if (eigrp.redistStatic && (deviceRoutes[device.id] || []).length > 0) {
+        redistLines.push(`redistribute static metric ${EIGRP_SEED_METRIC}`);
+      }
+      if (eigrp.redistConnected) {
+        redistLines.push(`redistribute connected metric ${EIGRP_SEED_METRIC}`);
+      }
+      const bgpForEigrpRedist = deviceBgp[device.id];
+      if (eigrp.redistBgp && bgpForEigrpRedist && bgpForEigrpRedist.enabled && bgpForEigrpRedist.asNumber) {
+        redistLines.push(`redistribute bgp ${bgpForEigrpRedist.asNumber} metric ${EIGRP_SEED_METRIC}`);
+      }
+
+      if (eigrp.namedMode) {
+        const procName = eigrp.processName || 'CORE';
+        lines.push(`router eigrp ${procName}`);
+        lines.push(` address-family ipv4 unicast autonomous-system ${eigrp.asNumber}`);
+        eigrpIfaces.forEach(iface => {
+          const [ip, cidr] = iface.ip.split('/');
+          const maskInt = maskFromCidr(parseInt(cidr, 10));
+          const networkAddr = intToIp((ipToInt(ip) & maskInt) >>> 0);
+          const wildcard = intToIp((~maskInt) >>> 0);
+          lines.push(`  network ${networkAddr} ${wildcard}`);
+        });
+        if (eigrp.passiveDefault) {
+          lines.push('  passive-interface default');
+          lines.push('  ! Réactiver manuellement les voisinages EIGRP nécessaires : "no passive-interface <interface-vers-le-voisin>"');
+        }
+        redistLines.forEach(l => lines.push(`  ${l}`));
+        if (eigrp.authType === 'md5') {
+          lines.push('  af-interface default');
+          lines.push('   authentication mode md5');
+          lines.push(`   authentication key-chain ${EIGRP_KEYCHAIN_NAME}`);
+          lines.push('  exit-af-interface');
+        } else if (eigrp.authType === 'sha256' && eigrp.authKey) {
+          lines.push('  af-interface default');
+          lines.push(`   authentication mode hmac-sha-256 0 ${eigrp.authKey}`);
+          lines.push('  exit-af-interface');
+        }
+        lines.push(' exit-address-family');
+        lines.push('!');
+        lines.push('! Mode nommé (IOS 15+) : le nom de processus ("' + procName + '") est local au routeur, seul le numéro d\'AS doit correspondre entre voisins.');
+      } else {
+        lines.push(`router eigrp ${eigrp.asNumber}`);
+        eigrpIfaces.forEach(iface => {
+          const [ip, cidr] = iface.ip.split('/');
+          const maskInt = maskFromCidr(parseInt(cidr, 10));
+          const networkAddr = intToIp((ipToInt(ip) & maskInt) >>> 0);
+          const wildcard = intToIp((~maskInt) >>> 0);
+          lines.push(` network ${networkAddr} ${wildcard}`);
+        });
+        lines.push(' no auto-summary');
+        if (eigrp.passiveDefault) {
+          lines.push(' passive-interface default');
+          lines.push(' ! Réactiver manuellement les voisinages EIGRP nécessaires : "no passive-interface <interface-vers-le-voisin>"');
+        }
+        redistLines.forEach(l => lines.push(` ${l}`));
+        lines.push('!');
+      }
+    }
   }
 
   const bgp = deviceBgp[device.id];
@@ -425,6 +537,9 @@ function generateRouterDeviceConfig(device) {
     });
     if (bgp.redistOspf && ospf && ospf.enabled) {
       lines.push(` redistribute ospf ${ospf.pid}`);
+    }
+    if (bgp.redistEigrp && eigrp && eigrp.enabled && eigrp.asNumber) {
+      lines.push(` redistribute eigrp ${eigrp.asNumber}`);
     }
     lines.push('!');
   }
@@ -606,6 +721,16 @@ function validateTopology() {
     problems.push({ level: 'warning', message: `Plusieurs domaines VTP différents détectés (${[...vtpDomains].join(', ')}) — les switchs ne pourront pas synchroniser leurs VLANs entre eux` });
   }
 
+  // 3bis. Numéros d'AS EIGRP différents entre routeurs (les voisinages EIGRP n'établissent qu'entre routeurs du même AS)
+  const eigrpAsNumbers = new Set();
+  devices.filter(d => d.type === 'router').forEach(d => {
+    const eigrpCfg = deviceEigrp[d.id];
+    if (eigrpCfg && eigrpCfg.enabled && eigrpCfg.asNumber) eigrpAsNumbers.add(eigrpCfg.asNumber);
+  });
+  if (eigrpAsNumbers.size > 1) {
+    problems.push({ level: 'warning', message: `Plusieurs numéros d'AS EIGRP différents détectés (${[...eigrpAsNumbers].join(', ')}) — deux routeurs EIGRP ne forment un voisinage que s'ils partagent le même AS` });
+  }
+
   // 4. Équipements isolés (aucun lien)
   devices.forEach(d => {
     const hasLink = links.some(l => l.a === d.id || l.b === d.id);
@@ -756,6 +881,7 @@ try {
     if (savedState.deviceRoutes) Object.assign(deviceRoutes, savedState.deviceRoutes);
     if (savedState.deviceOspf) Object.assign(deviceOspf, savedState.deviceOspf);
     if (savedState.deviceBgp) Object.assign(deviceBgp, savedState.deviceBgp);
+    if (savedState.deviceEigrp) Object.assign(deviceEigrp, savedState.deviceEigrp);
     if (savedState.deviceNat) Object.assign(deviceNat, savedState.deviceNat);
     if (savedState.deviceEtherchannels) Object.assign(deviceEtherchannels, savedState.deviceEtherchannels);
     if (savedState.deviceVtp) Object.assign(deviceVtp, savedState.deviceVtp);

@@ -86,7 +86,7 @@ const STATE_SHAPE = {
   networkGroups: 'array', serviceGroups: 'array',
   devicePorts: 'object', deviceInterfaces: 'object', deviceRoutes: 'object',
   deviceOspf: 'object', deviceNat: 'object', deviceEtherchannels: 'object',
-  deviceBgp: 'object',
+  deviceBgp: 'object', deviceEigrp: 'object',
   deviceVtp: 'object', deviceWifi: 'object', deviceStp: 'object',
   deviceVpn: 'object', deviceSecurity: 'object',
   deviceAdmin: 'object', deviceQos: 'object',
@@ -185,6 +185,7 @@ function applyStateSnapshot(json) {
   replaceDict(deviceRoutes, sanitized.deviceRoutes);
   replaceDict(deviceOspf, sanitized.deviceOspf);
   replaceDict(deviceBgp, sanitized.deviceBgp);
+  replaceDict(deviceEigrp, sanitized.deviceEigrp);
   replaceDict(deviceNat, sanitized.deviceNat);
   replaceDict(deviceEtherchannels, sanitized.deviceEtherchannels);
   replaceDict(deviceVtp, sanitized.deviceVtp);
@@ -301,6 +302,7 @@ function saveState() {
       deviceRoutes: typeof deviceRoutes !== 'undefined' ? deviceRoutes : {},
       deviceOspf: typeof deviceOspf !== 'undefined' ? deviceOspf : {},
       deviceBgp: typeof deviceBgp !== 'undefined' ? deviceBgp : {},
+      deviceEigrp: typeof deviceEigrp !== 'undefined' ? deviceEigrp : {},
       deviceNat: typeof deviceNat !== 'undefined' ? deviceNat : {},
       deviceEtherchannels: typeof deviceEtherchannels !== 'undefined' ? deviceEtherchannels : {},
       deviceVtp: typeof deviceVtp !== 'undefined' ? deviceVtp : {},

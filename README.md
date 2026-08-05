@@ -65,6 +65,23 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-04 — EIGRP : mode nommé, authentification MD5/SHA-256, redistribution connectée
+- **EIGRP named mode (IOS 15+)** : bascule via une case Classique/Nommé ; génère un bloc `router eigrp <nom> / address-family ipv4 unicast autonomous-system <AS>` complet (network, passive-interface, redistribution) au lieu du classique `router eigrp <AS>`
+- **Authentification EIGRP** : MD5 (key chain globale + `ip authentication mode/key-chain` sur chaque interface participante en mode classique, `af-interface default` en mode nommé) ou HMAC-SHA-256 (IOS 15.1+, mot de passe direct sans key chain)
+- **Redistribution des réseaux connectés dans EIGRP**, en plus d'OSPF/BGP/statique déjà présents, toujours avec la métrique de seed obligatoire
+- Correction d'un bug où la fonction de génération des lignes d'authentification par interface existait mais n'était jamais appelée, et où le mode nommé était configuré côté interface mais ignoré côté génération de config (toujours classique)
+- Testé de bout en bout : mode nommé + MD5 + redistribute connected, puis mode classique + MD5 sur interface — les deux produisent une sortie correcte sans erreur JS
+- Cache du service worker passé en v39
+
+### 2026-08-03 — EIGRP + redistribution croisée OSPF/EIGRP/BGP + STP (MST réel, Loop Guard)
+- **Nouveau protocole EIGRP** sur les routeurs (Topologie) : AS, `network`/wildcard générés pour chaque interface IP, `no auto-summary`, option `passive-interface default` (avec rappel qu'il faut réactiver manuellement le voisinage sur les liens inter-routeurs)
+- **Redistribution croisée entre les trois protocoles de routage** : OSPF↔EIGRP, OSPF↔BGP (déjà existant), EIGRP↔BGP — chaque sens est une case à cocher indépendante sur le protocole récepteur. Toute redistribution *vers* EIGRP applique automatiquement la métrique de seed obligatoire sous Cisco (bande passante/délai/fiabilité/charge/MTU) : `10000 100 255 1 1500`
+- **Validation automatique** : avertissement si deux routeurs EIGRP activés portent des AS différents (pas de voisinage possible), sur le même modèle que le contrôle de domaine VTP déjà existant
+- **STP — MST corrigé** : le mode MST générait juste `spanning-tree mode mst` sans configuration de région ; il pose maintenant un vrai bloc `spanning-tree mst configuration` (nom de région + révision + mappage `instance 1 vlan ...`) et applique la priorité sur `spanning-tree mst 1 priority` au lieu de `spanning-tree vlan ... priority`
+- **STP — Loop Guard** : nouvelle case à cocher globale (`spanning-tree loopguard default`), en complément de BPDU Guard et Root Guard déjà présents
+- Testé de bout en bout (deux routeurs EIGRP même AS puis AS différents pour vérifier l'avertissement, redistribution dans les trois sens, switch en mode MST avec 3 VLANs)
+- Cache du service worker passé en v38
+
 ### 2026-08-02 — OSPF multi-zone + préférence de chemin BGP (local-preference)
 - Dernière piste de la liste attaquée : **OSPF multi-zone**. Chaque interface routeur a maintenant un champ "Zone OSPF" optionnel qui remplace la zone par défaut du routeur — permet de transformer un routeur en ABR entre plusieurs zones, `network ... area X` (OSPFv2) et `ipv6 ospf ... area X` (OSPFv3) respectent l'override par interface
 - **BGP — préférence locale (local-preference)** par voisin : premier critère de sélection de chemin BGP, utile pour préférer un fournisseur sur un autre. Se combine proprement avec le filtrage "route par défaut uniquement" déjà existant — un seul route-map généré par voisin regroupant les deux réglages actifs sur ce voisin

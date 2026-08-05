@@ -10,6 +10,7 @@ const deviceInterfaces = {};  // deviceId -> [{name, sub, vlanId, ip, cidr, desc
 const deviceRoutes = {};      // deviceId -> [{network, cidr, nextHop}]
 const deviceOspf = {};         // deviceId -> {enabled, pid, area}
 const deviceBgp = {};           // deviceId -> {enabled, asNumber, networks: [], neighbors: [{ip, remoteAs}]}
+const deviceEigrp = {};         // deviceId -> {enabled, asNumber, namedMode, processName, passiveDefault, authType, authKeyId, authKey, redistOspf, redistBgp, redistStatic, redistConnected}
 const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, staticMappings}
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
@@ -251,6 +252,7 @@ document.getElementById('load-preset-btn').addEventListener('click', () => {
 
   deviceOspf.dev1 = { enabled: false, pid: '1', area: '0' };
   deviceBgp.dev1 = { enabled: false, asNumber: '', networks: [], neighbors: [] };
+  deviceEigrp.dev1 = { enabled: false, asNumber: '', namedMode: false, processName: 'CORE', passiveDefault: false, authType: 'none', authKeyId: '1', authKey: '', redistOspf: false, redistBgp: false, redistStatic: false, redistConnected: false };
 
   links = [
     { a: 'dev1', b: 'dev2', label: 'Gi0/1 ↔ Gi0/1, trunk' },
@@ -275,6 +277,7 @@ document.getElementById('reset-topology-btn').addEventListener('click', () => {
   Object.keys(deviceRoutes).forEach(k => delete deviceRoutes[k]);
   Object.keys(deviceOspf).forEach(k => delete deviceOspf[k]);
   Object.keys(deviceBgp).forEach(k => delete deviceBgp[k]);
+  Object.keys(deviceEigrp).forEach(k => delete deviceEigrp[k]);
   links = [];
   selectedDeviceId = null;
   deviceIdSeq = 1;
@@ -314,11 +317,12 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceRoutes[id] = [];
   deviceOspf[id] = { enabled: false, pid: '1', area: '0' };
   deviceBgp[id] = { enabled: false, asNumber: '', networks: [], neighbors: [] };
+  deviceEigrp[id] = { enabled: false, asNumber: '', namedMode: false, processName: 'CORE', passiveDefault: false, authType: 'none', authKeyId: '1', authKey: '', redistOspf: false, redistBgp: false, redistStatic: false, redistConnected: false };
   deviceNat[id] = { patEnabled: false, outsideIface: '', staticMappings: [] };
   deviceEtherchannels[id] = [];
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
-  deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
+  deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false };
   deviceVpn[id] = { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
   deviceAdmin[id] = { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
@@ -350,6 +354,7 @@ document.addEventListener('click', (e) => {
     delete deviceRoutes[id];
     delete deviceOspf[id];
     delete deviceBgp[id];
+    delete deviceEigrp[id];
     delete deviceNat[id];
     delete deviceEtherchannels[id];
     delete deviceVtp[id];
@@ -536,6 +541,15 @@ function updateAdminFieldVisibility() {
   document.getElementById('dev-adm-aaa-key-field').style.display = aaaOn ? 'flex' : 'none';
 }
 
+function updateEigrpFieldVisibility() {
+  const named = document.getElementById('dev-eigrp-named-mode').value === 'named';
+  document.getElementById('dev-eigrp-process-name-wrap').style.display = named ? 'flex' : 'none';
+
+  const authType = document.getElementById('dev-eigrp-auth-type').value;
+  document.getElementById('dev-eigrp-auth-keyid-wrap').style.display = authType === 'md5' ? 'flex' : 'none';
+  document.getElementById('dev-eigrp-auth-key-wrap').style.display = authType === 'none' ? 'none' : 'flex';
+}
+
 function wireAdminBlock() {
   const adm = deviceAdmin[selectedDeviceId] || { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
   document.getElementById('dev-adm-snmp-enabled').checked = adm.snmpEnabled;
@@ -684,9 +698,12 @@ function renderDeviceConfigPanel() {
           <div class="mini-field adv-checkbox">
             <label><input type="checkbox" id="dev-stp-rootguard"> Root Guard (ports trunk)</label>
           </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-stp-loopguard"> Loop Guard (global)</label>
+          </div>
           <button class="btn-add" id="dev-stp-save-btn">Enregistrer</button>
         </div>
-        <div class="hint" id="dev-stp-hint">Priorité basse (ex: 4096, 8192) = plus de chances de devenir root bridge. Par défaut Cisco : 32768.</div>
+        <div class="hint" id="dev-stp-hint">Priorité basse (ex: 4096, 8192) = plus de chances de devenir root bridge. Par défaut Cisco : 32768. Loop Guard bloque un port qui cesse de recevoir des BPDU au lieu de le faire basculer en forwarding (protection contre les liens unidirectionnels).</div>
 
         ${qosBlockHtml()}
 
@@ -808,18 +825,20 @@ function renderDeviceConfigPanel() {
     });
 
     // ---- STP ----
-    const stp = deviceStp[selectedDeviceId] || { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false };
+    const stp = deviceStp[selectedDeviceId] || { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false };
     document.getElementById('dev-stp-mode').value = stp.mode;
     document.getElementById('dev-stp-priority').value = stp.priority;
     document.getElementById('dev-stp-bpduguard').checked = stp.bpduGuard;
     document.getElementById('dev-stp-rootguard').checked = stp.rootGuard;
+    document.getElementById('dev-stp-loopguard').checked = !!stp.loopGuard;
 
     document.getElementById('dev-stp-save-btn').addEventListener('click', () => {
       deviceStp[selectedDeviceId] = {
         mode: document.getElementById('dev-stp-mode').value,
         priority: document.getElementById('dev-stp-priority').value.trim(),
         bpduGuard: document.getElementById('dev-stp-bpduguard').checked,
-        rootGuard: document.getElementById('dev-stp-rootguard').checked
+        rootGuard: document.getElementById('dev-stp-rootguard').checked,
+        loopGuard: document.getElementById('dev-stp-loopguard').checked
       };
       renderDeviceConfigPanel();
     });
@@ -1120,7 +1139,85 @@ function renderDeviceConfigPanel() {
             <input type="checkbox" id="dev-ospf-redist-bgp"> Redistribuer les routes BGP dans OSPF (utile si le routeur fait aussi de la sortie eBGP)
           </label>
         </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-ospf-redist-eigrp"> Redistribuer les routes EIGRP dans OSPF
+          </label>
+        </div>
         <div class="hint" id="dev-ospf-hint"></div>
+
+        <div class="subsection-label">Routage dynamique (EIGRP)</div>
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Activer EIGRP ?</label>
+            <select id="dev-eigrp-enabled">
+              <option value="no">Non</option>
+              <option value="yes">Oui</option>
+            </select>
+          </div>
+          <div class="mini-field">
+            <label>AS (numéro EIGRP)</label>
+            <input type="text" id="dev-eigrp-as" placeholder="100">
+          </div>
+          <div class="mini-field">
+            <label>Syntaxe</label>
+            <select id="dev-eigrp-named-mode">
+              <option value="classic">Classique</option>
+              <option value="named">Named mode</option>
+            </select>
+          </div>
+          <div class="mini-field" id="dev-eigrp-process-name-wrap">
+            <label>Nom du process (named mode)</label>
+            <input type="text" id="dev-eigrp-process-name" placeholder="CORE">
+          </div>
+          <div class="mini-field adv-checkbox">
+            <label><input type="checkbox" id="dev-eigrp-passive-default"> Passive-interface par défaut</label>
+          </div>
+          <button class="btn-add" id="dev-eigrp-save-btn">Enregistrer</button>
+        </div>
+        <div class="hint">Un <code>network</code> est généré pour chaque interface IP configurée, avec <code>no auto-summary</code> en mode classique (le mode named ne connaît pas cette commande — il est classless par défaut). "Passive-interface par défaut" désactive l'envoi de messages EIGRP sur toutes les interfaces (à ré-activer manuellement sur les liens vers les voisins EIGRP) — bonne pratique pour ne pas exposer le protocole côté LAN d'accès.</div>
+
+        <div class="builder-row">
+          <div class="mini-field">
+            <label>Authentification EIGRP</label>
+            <select id="dev-eigrp-auth-type">
+              <option value="none">Aucune</option>
+              <option value="md5">MD5 (key chain)</option>
+              <option value="sha256">HMAC-SHA-256</option>
+            </select>
+          </div>
+          <div class="mini-field" id="dev-eigrp-auth-keyid-wrap">
+            <label>ID de clé (MD5)</label>
+            <input type="text" id="dev-eigrp-auth-keyid" placeholder="1">
+          </div>
+          <div class="mini-field" id="dev-eigrp-auth-key-wrap">
+            <label>Clé / mot de passe partagé</label>
+            <input type="text" id="dev-eigrp-auth-key" placeholder="Cisco123!">
+          </div>
+        </div>
+        <div class="hint" id="dev-eigrp-auth-hint">MD5 nécessite une <code>key chain</code> globale appliquée sur chaque interface participant à EIGRP ; HMAC-SHA-256 (IOS 15.1+) se configure directement sur l'interface sans key chain, avec un mot de passe en clair dans la commande (à stocker chiffré via "service password-encryption" en pratique).</div>
+
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-eigrp-redist-ospf"> Redistribuer les routes OSPF dans EIGRP
+          </label>
+        </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-eigrp-redist-bgp"> Redistribuer les routes BGP dans EIGRP
+          </label>
+        </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-eigrp-redist-static"> Redistribuer les routes statiques dans EIGRP
+          </label>
+        </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-eigrp-redist-connected"> Redistribuer les réseaux connectés dans EIGRP
+          </label>
+        </div>
+        <div class="hint" id="dev-eigrp-hint">EIGRP exige une métrique de "seed" explicite pour toute route redistribuée depuis un protocole externe (bande passante/délai/fiabilité/charge/MTU) : NetForge applique une métrique par défaut prudente (10000 100 255 1 1500).</div>
 
         <div class="subsection-label">Routage dynamique (BGP, eBGP simple)</div>
         <div class="builder-row">
@@ -1162,6 +1259,11 @@ function renderDeviceConfigPanel() {
         <div class="builder-row">
           <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
             <input type="checkbox" id="dev-bgp-redist-ospf"> Redistribuer les routes OSPF dans BGP (annoncer le réseau interne vers l'extérieur)
+          </label>
+        </div>
+        <div class="builder-row">
+          <label style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:0.8rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" id="dev-bgp-redist-eigrp"> Redistribuer les routes EIGRP dans BGP
           </label>
         </div>
         <div class="builder-row">
@@ -1492,11 +1594,12 @@ function renderDeviceConfigPanel() {
     renderDevIfRows();
     renderDevRouteRows();
 
-    const ospf = deviceOspf[selectedDeviceId] || { enabled: false, pid: '1', area: '0', redistBgp: false };
+    const ospf = deviceOspf[selectedDeviceId] || { enabled: false, pid: '1', area: '0', redistBgp: false, redistEigrp: false };
     document.getElementById('dev-ospf-enabled').value = ospf.enabled ? 'yes' : 'no';
     document.getElementById('dev-ospf-pid').value = ospf.pid;
     document.getElementById('dev-ospf-area').value = ospf.area;
     document.getElementById('dev-ospf-redist-bgp').checked = !!ospf.redistBgp;
+    document.getElementById('dev-ospf-redist-eigrp').checked = !!ospf.redistEigrp;
     document.getElementById('dev-ospf-hint').textContent = ospf.enabled
       ? `OSPF actif — les réseaux de toutes les interfaces IP configurées seront annoncés en zone ${ospf.area}`
       : '';
@@ -1506,17 +1609,55 @@ function renderDeviceConfigPanel() {
         enabled: document.getElementById('dev-ospf-enabled').value === 'yes',
         pid: document.getElementById('dev-ospf-pid').value.trim() || '1',
         area: document.getElementById('dev-ospf-area').value.trim() || '0',
-        redistBgp: document.getElementById('dev-ospf-redist-bgp').checked
+        redistBgp: document.getElementById('dev-ospf-redist-bgp').checked,
+        redistEigrp: document.getElementById('dev-ospf-redist-eigrp').checked
+      };
+      renderDeviceConfigPanel();
+    });
+
+    // ---- EIGRP ----
+    const eigrp = deviceEigrp[selectedDeviceId] || { enabled: false, asNumber: '', namedMode: false, processName: 'CORE', passiveDefault: false, authType: 'none', authKeyId: '1', authKey: '', redistOspf: false, redistBgp: false, redistStatic: false, redistConnected: false };
+    document.getElementById('dev-eigrp-enabled').value = eigrp.enabled ? 'yes' : 'no';
+    document.getElementById('dev-eigrp-as').value = eigrp.asNumber || '';
+    document.getElementById('dev-eigrp-named-mode').value = eigrp.namedMode ? 'named' : 'classic';
+    document.getElementById('dev-eigrp-process-name').value = eigrp.processName || 'CORE';
+    document.getElementById('dev-eigrp-passive-default').checked = !!eigrp.passiveDefault;
+    document.getElementById('dev-eigrp-auth-type').value = eigrp.authType || 'none';
+    document.getElementById('dev-eigrp-auth-keyid').value = eigrp.authKeyId || '1';
+    document.getElementById('dev-eigrp-auth-key').value = eigrp.authKey || '';
+    document.getElementById('dev-eigrp-redist-ospf').checked = !!eigrp.redistOspf;
+    document.getElementById('dev-eigrp-redist-bgp').checked = !!eigrp.redistBgp;
+    document.getElementById('dev-eigrp-redist-static').checked = !!eigrp.redistStatic;
+    document.getElementById('dev-eigrp-redist-connected').checked = !!eigrp.redistConnected;
+    updateEigrpFieldVisibility();
+    document.getElementById('dev-eigrp-named-mode').addEventListener('change', updateEigrpFieldVisibility);
+    document.getElementById('dev-eigrp-auth-type').addEventListener('change', updateEigrpFieldVisibility);
+
+    document.getElementById('dev-eigrp-save-btn').addEventListener('click', () => {
+      deviceEigrp[selectedDeviceId] = {
+        enabled: document.getElementById('dev-eigrp-enabled').value === 'yes',
+        asNumber: document.getElementById('dev-eigrp-as').value.trim() || '1',
+        namedMode: document.getElementById('dev-eigrp-named-mode').value === 'named',
+        processName: document.getElementById('dev-eigrp-process-name').value.trim() || 'CORE',
+        passiveDefault: document.getElementById('dev-eigrp-passive-default').checked,
+        authType: document.getElementById('dev-eigrp-auth-type').value,
+        authKeyId: document.getElementById('dev-eigrp-auth-keyid').value.trim() || '1',
+        authKey: document.getElementById('dev-eigrp-auth-key').value.trim(),
+        redistOspf: document.getElementById('dev-eigrp-redist-ospf').checked,
+        redistBgp: document.getElementById('dev-eigrp-redist-bgp').checked,
+        redistStatic: document.getElementById('dev-eigrp-redist-static').checked,
+        redistConnected: document.getElementById('dev-eigrp-redist-connected').checked
       };
       renderDeviceConfigPanel();
     });
 
     // ---- BGP ----
-    const bgp = deviceBgp[selectedDeviceId] || { enabled: false, asNumber: '', networks: [], neighbors: [], redistOspf: false, defaultOnly: false };
+    const bgp = deviceBgp[selectedDeviceId] || { enabled: false, asNumber: '', networks: [], neighbors: [], redistOspf: false, redistEigrp: false, defaultOnly: false };
     document.getElementById('dev-bgp-enabled').value = bgp.enabled ? 'yes' : 'no';
     document.getElementById('dev-bgp-as').value = bgp.asNumber || '';
     document.getElementById('dev-bgp-networks').value = (bgp.networks || []).join(', ');
     document.getElementById('dev-bgp-redist-ospf').checked = !!bgp.redistOspf;
+    document.getElementById('dev-bgp-redist-eigrp').checked = !!bgp.redistEigrp;
     document.getElementById('dev-bgp-default-only').checked = !!bgp.defaultOnly;
     document.getElementById('dev-bgp-hint').textContent = bgp.enabled
       ? `BGP actif (AS ${bgp.asNumber || '?'}) — ${(bgp.neighbors || []).length} voisin(s) configuré(s)`
@@ -1569,6 +1710,7 @@ function renderDeviceConfigPanel() {
         networks: networksRaw.split(',').map(s => s.trim()).filter(Boolean),
         neighbors: existing.neighbors || [],
         redistOspf: document.getElementById('dev-bgp-redist-ospf').checked,
+        redistEigrp: document.getElementById('dev-bgp-redist-eigrp').checked,
         defaultOnly: document.getElementById('dev-bgp-default-only').checked
       };
       renderDeviceConfigPanel();
