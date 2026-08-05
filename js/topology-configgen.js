@@ -50,8 +50,19 @@ function generateSwitchDeviceConfig(device) {
         lines.push(`spanning-tree mst 1 priority ${stp.priority}`);
       }
       lines.push('! Tous les switchs du même domaine MST doivent partager exactement le même nom de région, la même révision et le même mappage instance/VLAN.');
-    } else if (stp.priority && topoVlanState.length > 0) {
-      lines.push(`spanning-tree vlan ${topoVlanState.map(v => v.id).join(',')} priority ${stp.priority}`);
+    } else {
+      const vlanPriorities = stp.vlanPriorities || [];
+      const overriddenIds = new Set(vlanPriorities.map(vp => vp.vlanId));
+      const defaultVlans = topoVlanState.filter(v => !overriddenIds.has(String(v.id))).map(v => v.id);
+      if (stp.priority && defaultVlans.length > 0) {
+        lines.push(`spanning-tree vlan ${defaultVlans.join(',')} priority ${stp.priority}`);
+      }
+      vlanPriorities.forEach(vp => {
+        lines.push(`spanning-tree vlan ${vp.vlanId} priority ${vp.priority}`);
+      });
+      if (vlanPriorities.length > 0) {
+        lines.push('! Priorité surclassée individuellement sur certains VLANs — utile en actif-actif HSRP/VRRP pour répartir la racine STP entre deux switchs selon les VLANs');
+      }
     }
     if (stp.loopGuard) lines.push('spanning-tree loopguard default');
     lines.push('!');
@@ -220,6 +231,21 @@ function generateRouterDeviceConfig(device) {
     }
     return [];
   }
+  function ipv6RaLinesForIface(iface) {
+    // SLAAC pur : rien à ajouter, le routeur annonce déjà le préfixe par RA dès qu'il a une adresse IPv6 configurée.
+    // DHCPv6 sans état : les hôtes se configurent en SLAAC mais vont chercher DNS/domaine auprès d'un serveur DHCPv6 (flag "O").
+    // DHCPv6 avec état : les hôtes reçoivent leur adresse ET le reste depuis le serveur DHCPv6 (flag "M", qui implique "O").
+    if (iface.ip6Mode === 'dhcpv6-stateless') {
+      return [' ipv6 nd other-config-flag', ` ipv6 dhcp server ${dhcpv6PoolNameForIface(iface)}`];
+    }
+    if (iface.ip6Mode === 'dhcpv6-stateful') {
+      return [' ipv6 nd managed-config-flag', ` ipv6 dhcp server ${dhcpv6PoolNameForIface(iface)}`];
+    }
+    return [];
+  }
+  function dhcpv6PoolNameForIface(iface) {
+    return `POOLV6_${iface.sub ? 'VLAN' + iface.vlanId : iface.name.replace(/\W/g, '')}`;
+  }
   ifaces.forEach(iface => {
     const [ip, cidr] = iface.ip.split('/');
     const mask = intToIp(maskFromCidr(parseInt(cidr, 10)));
@@ -231,6 +257,7 @@ function generateRouterDeviceConfig(device) {
       if (iface.ip6) {
         lines.push(` ipv6 address ${iface.ip6}`);
         if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${iface.ospfArea || ospf.area}`);
+        lines.push(...ipv6RaLinesForIface(iface));
       }
       if (iface.redundancy && iface.redundancy.protocol && iface.redundancy.vip) {
         const red = iface.redundancy;
@@ -248,6 +275,7 @@ function generateRouterDeviceConfig(device) {
       if (iface.ip6) {
         lines.push(` ipv6 address ${iface.ip6}`);
         if (ospf && ospf.enabled) lines.push(` ipv6 ospf ${ospf.pid} area ${iface.ospfArea || ospf.area}`);
+        lines.push(...ipv6RaLinesForIface(iface));
       }
       if (iface.name.startsWith('Se')) {
         if (iface.encapsulation && iface.encapsulation !== 'hdlc') {
@@ -284,6 +312,26 @@ function generateRouterDeviceConfig(device) {
       lines.push(` network ${networkAddr} ${mask}`);
       lines.push(` default-router ${ip}`);
       lines.push(` dns-server ${iface.dns || '8.8.8.8'}`);
+      lines.push('!');
+    });
+  }
+
+  const dhcpv6Ifaces = ifaces.filter(iface => iface.ip6 && (iface.ip6Mode === 'dhcpv6-stateless' || iface.ip6Mode === 'dhcpv6-stateful'));
+  if (dhcpv6Ifaces.length > 0) {
+    lines.push('! --- Pools DHCPv6 ---');
+    dhcpv6Ifaces.forEach(iface => {
+      const [addr6, prefixLenRaw] = iface.ip6.split('/');
+      const prefixLen = parseInt(prefixLenRaw, 10);
+      const big = parseIPv6ToBigInt(addr6);
+      const poolName = dhcpv6PoolNameForIface(iface);
+      lines.push(`ipv6 dhcp pool ${poolName}`);
+      if (iface.ip6Mode === 'dhcpv6-stateful' && big !== null && !isNaN(prefixLen)) {
+        const hostBits = 128n - BigInt(prefixLen);
+        const networkBig = (big >> hostBits) << hostBits;
+        lines.push(` address prefix ${compressIPv6(networkBig)}/${prefixLen}`);
+      }
+      if (iface.dns6) lines.push(` dns-server ${iface.dns6}`);
+      lines.push(' domain-name NETFORGE.LOCAL');
       lines.push('!');
     });
   }
@@ -335,7 +383,91 @@ function generateRouterDeviceConfig(device) {
   }
 
   const vpn = deviceVpn[device.id];
-  if (vpn && vpn.enabled && vpn.peerIp && vpn.outsideIface && vpn.localNetwork && vpn.remoteNetwork) {
+  const espEncryptionKw = (enc) => (enc === '3des' ? 'esp-3des' : `esp-${enc}`);
+
+  if (vpn && vpn.enabled && vpn.outsideIface && vpn.mode === 'dmvpn' && vpn.dmvpn && vpn.dmvpn.tunnelIp) {
+    const d = vpn.dmvpn;
+    const eigrpForDmvpn = deviceEigrp[device.id];
+    lines.push('! --- DMVPN ---');
+    if (vpn.ike === '1') {
+      lines.push('crypto isakmp policy 10');
+      lines.push(` encryption ${vpn.encryption}`);
+      lines.push(` hash ${vpn.hash}`);
+      lines.push(' authentication pre-share');
+      lines.push(` group ${vpn.dhGroup}`);
+      lines.push('!');
+      if (d.role === 'hub') {
+        lines.push(`crypto isakmp key ${d.presharedKey || '<A_DEFINIR>'} address 0.0.0.0 0.0.0.0`);
+        lines.push('! Clé "any" côté hub : chaque spoke s\'authentifie avec la même clé, identifié dynamiquement par son adresse WAN');
+      } else {
+        lines.push(`crypto isakmp key ${d.presharedKey || '<A_DEFINIR>'} address ${d.hubPublicIp || '<IP_PUBLIQUE_HUB>'}`);
+      }
+      lines.push('!');
+    } else {
+      lines.push('crypto ikev2 proposal DMVPN-PROPOSAL');
+      lines.push(` encryption ${vpn.encryption}`);
+      lines.push(` integrity ${vpn.hash}`);
+      lines.push(` group ${vpn.dhGroup}`);
+      lines.push('!');
+      lines.push('crypto ikev2 policy DMVPN-POLICY');
+      lines.push(' proposal DMVPN-PROPOSAL');
+      lines.push('!');
+      lines.push('crypto ikev2 keyring DMVPN-KEYRING');
+      if (d.role === 'hub') {
+        lines.push(' peer ANY-SPOKE');
+        lines.push('  address 0.0.0.0 0.0.0.0');
+        lines.push(`  pre-shared-key ${d.presharedKey || '<A_DEFINIR>'}`);
+      } else {
+        lines.push(' peer HUB');
+        lines.push(`  address ${d.hubPublicIp || '<IP_PUBLIQUE_HUB>'}`);
+        lines.push(`  pre-shared-key ${d.presharedKey || '<A_DEFINIR>'}`);
+      }
+      lines.push('!');
+      lines.push('crypto ikev2 profile DMVPN-IKEV2-PROFILE');
+      if (d.role === 'hub') {
+        lines.push(' match identity remote any');
+      } else {
+        lines.push(` match identity remote address ${d.hubPublicIp || '<IP_PUBLIQUE_HUB>'} 255.255.255.255`);
+      }
+      lines.push(' authentication local pre-share');
+      lines.push(' authentication remote pre-share');
+      lines.push(' keyring local DMVPN-KEYRING');
+      lines.push('!');
+    }
+
+    lines.push(`crypto ipsec transform-set DMVPN-TSET ${espEncryptionKw(vpn.encryption)} esp-${vpn.hash}-hmac`);
+    lines.push(' mode transport');
+    lines.push('!');
+    lines.push('crypto ipsec profile DMVPN-IPSEC-PROFILE');
+    lines.push(' set transform-set DMVPN-TSET');
+    if (vpn.ike !== '1') lines.push(' set ikev2-profile DMVPN-IKEV2-PROFILE');
+    lines.push('!');
+
+    const tunnelId = d.tunnelId || '0';
+    lines.push(`interface Tunnel${tunnelId}`);
+    lines.push(` ip address ${d.tunnelIp} ${intToIp(maskFromCidr(parseInt(d.tunnelCidr || '24', 10)))}`);
+    lines.push(` ip nhrp network-id ${d.nhrpNetworkId || '1'}`);
+    if (d.nhrpAuth) lines.push(` ip nhrp authentication ${d.nhrpAuth}`);
+    if (d.role === 'hub') {
+      lines.push(' ip nhrp map multicast dynamic');
+      if (eigrpForDmvpn && eigrpForDmvpn.enabled && eigrpForDmvpn.asNumber) {
+        lines.push(` no ip split-horizon eigrp ${eigrpForDmvpn.asNumber}`);
+        lines.push(' ! Split-horizon EIGRP désactivé sur le hub : sans ça, une route apprise d\'un spoke via ce tunnel ne serait jamais réannoncée aux autres spokes');
+      }
+    } else if (d.hubTunnelIp && d.hubPublicIp) {
+      lines.push(` ip nhrp map ${d.hubTunnelIp} ${d.hubPublicIp}`);
+      lines.push(` ip nhrp map multicast ${d.hubPublicIp}`);
+      lines.push(` ip nhrp nhs ${d.hubTunnelIp}`);
+    }
+    lines.push(` tunnel source ${vpn.outsideIface}`);
+    lines.push(' tunnel mode gre multipoint');
+    lines.push(` tunnel key ${tunnelId}`);
+    lines.push(' tunnel protection ipsec profile DMVPN-IPSEC-PROFILE');
+    lines.push(' no shutdown');
+    lines.push('!');
+    lines.push('! DMVPN Phase 1 (hub-and-spoke) : le trafic spoke-à-spoke transite par le hub. Les tunnels dynamiques spoke-à-spoke (Phase 2/3) demandent un routage et une résolution NHRP plus avancés, hors périmètre ici.');
+    lines.push('!');
+  } else if (vpn && vpn.enabled && vpn.outsideIface && (vpn.tunnels || []).length > 0) {
     lines.push('! --- VPN Site-à-Site (IPsec) ---');
     if (vpn.ike === '1') {
       lines.push('crypto isakmp policy 10');
@@ -344,7 +476,9 @@ function generateRouterDeviceConfig(device) {
       lines.push(' authentication pre-share');
       lines.push(` group ${vpn.dhGroup}`);
       lines.push('!');
-      lines.push(`crypto isakmp key ${vpn.presharedKey || '<A_DEFINIR>'} address ${vpn.peerIp}`);
+      vpn.tunnels.forEach(t => {
+        lines.push(`crypto isakmp key ${t.presharedKey || '<A_DEFINIR>'} address ${t.peerIp}`);
+      });
       lines.push('!');
     } else {
       // IKEv2 (recommandé) : remplace la politique ISAKMP historique par un proposal/profile IKEv2, plus flexible et plus sûr.
@@ -357,41 +491,46 @@ function generateRouterDeviceConfig(device) {
       lines.push(' proposal NETFORGE-IKEV2-PROPOSAL');
       lines.push('!');
       lines.push('crypto ikev2 keyring NETFORGE-IKEV2-KEYRING');
-      lines.push(` peer NETFORGE-PEER`);
-      lines.push(`  address ${vpn.peerIp}`);
-      lines.push(`  pre-shared-key ${vpn.presharedKey || '<A_DEFINIR>'}`);
+      vpn.tunnels.forEach((t, i) => {
+        lines.push(` peer NETFORGE-PEER-${i + 1}`);
+        lines.push(`  address ${t.peerIp}`);
+        lines.push(`  pre-shared-key ${t.presharedKey || '<A_DEFINIR>'}`);
+      });
       lines.push('!');
-      lines.push('crypto ikev2 profile NETFORGE-IKEV2-PROFILE');
-      lines.push(` match identity remote address ${vpn.peerIp} 255.255.255.255`);
-      lines.push(' authentication local pre-share');
-      lines.push(' authentication remote pre-share');
-      lines.push(' keyring local NETFORGE-IKEV2-KEYRING');
-      lines.push('!');
+      vpn.tunnels.forEach((t, i) => {
+        lines.push(`crypto ikev2 profile NETFORGE-IKEV2-PROFILE-${i + 1}`);
+        lines.push(` match identity remote address ${t.peerIp} 255.255.255.255`);
+        lines.push(' authentication local pre-share');
+        lines.push(' authentication remote pre-share');
+        lines.push(' keyring local NETFORGE-IKEV2-KEYRING');
+        lines.push('!');
+      });
     }
 
-    const espEncryption = vpn.encryption === '3des' ? 'esp-3des' : `esp-${vpn.encryption}`;
-    lines.push(`crypto ipsec transform-set NETFORGE-TSET ${espEncryption} esp-${vpn.hash}-hmac`);
+    lines.push(`crypto ipsec transform-set NETFORGE-TSET ${espEncryptionKw(vpn.encryption)} esp-${vpn.hash}-hmac`);
     lines.push(' mode tunnel');
     lines.push('!');
 
-    const [localIp, localCidr] = vpn.localNetwork.split('/');
-    const [remoteIp, remoteCidr] = vpn.remoteNetwork.split('/');
-    const localMaskInt = maskFromCidr(parseInt(localCidr, 10));
-    const remoteMaskInt = maskFromCidr(parseInt(remoteCidr, 10));
-    const localNet = intToIp((ipToInt(localIp) & localMaskInt) >>> 0);
-    const remoteNet = intToIp((ipToInt(remoteIp) & remoteMaskInt) >>> 0);
-    const localWildcard = intToIp((~localMaskInt) >>> 0);
-    const remoteWildcard = intToIp((~remoteMaskInt) >>> 0);
+    vpn.tunnels.forEach((t, i) => {
+      const [localIp, localCidr] = t.localNetwork.split('/');
+      const [remoteIp, remoteCidr] = t.remoteNetwork.split('/');
+      const localMaskInt = maskFromCidr(parseInt(localCidr, 10));
+      const remoteMaskInt = maskFromCidr(parseInt(remoteCidr, 10));
+      const localNet = intToIp((ipToInt(localIp) & localMaskInt) >>> 0);
+      const remoteNet = intToIp((ipToInt(remoteIp) & remoteMaskInt) >>> 0);
+      const localWildcard = intToIp((~localMaskInt) >>> 0);
+      const remoteWildcard = intToIp((~remoteMaskInt) >>> 0);
 
-    lines.push('ip access-list extended NETFORGE-VPN-ACL');
-    lines.push(` permit ip ${localNet} ${localWildcard} ${remoteNet} ${remoteWildcard}`);
-    lines.push('!');
-    lines.push('crypto map NETFORGE-VPNMAP 10 ipsec-isakmp');
-    lines.push(` set peer ${vpn.peerIp}`);
-    lines.push(' set transform-set NETFORGE-TSET');
-    if (vpn.ike !== '1') lines.push(' set ikev2-profile NETFORGE-IKEV2-PROFILE');
-    lines.push(' match address NETFORGE-VPN-ACL');
-    lines.push('!');
+      lines.push(`ip access-list extended NETFORGE-VPN-ACL-${i + 1}`);
+      lines.push(` permit ip ${localNet} ${localWildcard} ${remoteNet} ${remoteWildcard}`);
+      lines.push('!');
+      lines.push(`crypto map NETFORGE-VPNMAP ${(i + 1) * 10} ipsec-isakmp`);
+      lines.push(` set peer ${t.peerIp}`);
+      lines.push(' set transform-set NETFORGE-TSET');
+      if (vpn.ike !== '1') lines.push(` set ikev2-profile NETFORGE-IKEV2-PROFILE-${i + 1}`);
+      lines.push(` match address NETFORGE-VPN-ACL-${i + 1}`);
+      lines.push('!');
+    });
     lines.push(`interface ${vpn.outsideIface}`);
     lines.push(' crypto map NETFORGE-VPNMAP');
     lines.push('!');

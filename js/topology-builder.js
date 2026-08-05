@@ -15,8 +15,21 @@ const deviceNat = {};           // deviceId -> {patEnabled, outsideIface, static
 const deviceEtherchannels = {};  // deviceId -> [{groupId, members, mode, portMode, vlanId}]
 const deviceVtp = {};             // deviceId -> {mode, domain, version, password}
 const deviceWifi = {};            // deviceId -> {ssid, security, passphrase, vlanId, band, channel}
-const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard}
-const deviceVpn = {};              // deviceId -> {enabled, peerIp, presharedKey, localNetwork, remoteNetwork, outsideIface, encryption, hash, dhGroup}
+const deviceStp = {};              // deviceId -> {mode, priority, bpduGuard, rootGuard, loopGuard, vlanPriorities: [{vlanId, priority}]}
+const deviceVpn = {};              // deviceId -> {mode: 'site-to-site'|'dmvpn', enabled, ike, encryption, hash, dhGroup, outsideIface, tunnels: [{peerIp, presharedKey, localNetwork, remoteNetwork}], dmvpn: {role, tunnelIp, tunnelCidr, nhrpNetworkId, nhrpAuth, presharedKey, hubTunnelIp, hubPublicIp}}
+function defaultVpnState() {
+  return {
+    enabled: false,
+    mode: 'site-to-site',
+    ike: '2',
+    encryption: 'aes 256',
+    hash: 'sha256',
+    dhGroup: '14',
+    outsideIface: '',
+    tunnels: [],
+    dmvpn: { role: 'hub', tunnelId: '0', tunnelIp: '', tunnelCidr: '24', nhrpNetworkId: '1', nhrpAuth: '', presharedKey: '', hubTunnelIp: '', hubPublicIp: '' }
+  };
+}
 const deviceSecurity = {};         // deviceId -> {enableSecret, username, userPassword, sshEnabled, domain, banner}
 const deviceAdmin = {};             // deviceId -> {snmpEnabled, snmpVersion, snmpCommunity, snmpV3User, snmpV3AuthPass, snmpV3PrivPass, snmpServer, ntpServer, ntpAuthEnabled, ntpKey, syslogServer, syslogLevel, aaaMode, aaaServer, aaaKey}
 const deviceQos = {};               // deviceId -> {enabled, trust} — switchs uniquement (frontière de confiance QoS sur les ports trunk)
@@ -322,8 +335,8 @@ document.getElementById('add-device-btn').addEventListener('click', () => {
   deviceEtherchannels[id] = [];
   deviceVtp[id] = { mode: 'off', domain: '', version: '2', password: '' };
   deviceWifi[id] = { ssid: '', security: 'wpa2-psk', passphrase: '', vlanId: '', channel: '6', band: '2.4' };
-  deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false };
-  deviceVpn[id] = { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
+  deviceStp[id] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false, vlanPriorities: [] };
+  deviceVpn[id] = defaultVpnState();
   deviceSecurity[id] = { enableSecret: '', username: '', userPassword: '', sshEnabled: false, domain: '', banner: '' };
   deviceAdmin[id] = { snmpEnabled: false, snmpVersion: '2c', snmpCommunity: '', snmpV3User: '', snmpV3AuthPass: '', snmpV3PrivPass: '', snmpServer: '', ntpServer: '', ntpAuthEnabled: false, ntpKey: '', syslogServer: '', syslogLevel: '6', aaaMode: 'local', aaaServer: '', aaaKey: '' };
   deviceQos[id] = { enabled: false, trust: 'none', wanIface: '', voiceBw: '128' };
@@ -689,7 +702,7 @@ function renderDeviceConfigPanel() {
             </select>
           </div>
           <div class="mini-field grow">
-            <label>Priorité (toutes VLANs, optionnel)</label>
+            <label>Priorité par défaut (toutes VLANs sans override, optionnel)</label>
             <input type="text" id="dev-stp-priority" placeholder="ex: 4096 pour root bridge">
           </div>
           <div class="mini-field adv-checkbox">
@@ -704,6 +717,22 @@ function renderDeviceConfigPanel() {
           <button class="btn-add" id="dev-stp-save-btn">Enregistrer</button>
         </div>
         <div class="hint" id="dev-stp-hint">Priorité basse (ex: 4096, 8192) = plus de chances de devenir root bridge. Par défaut Cisco : 32768. Loop Guard bloque un port qui cesse de recevoir des BPDU au lieu de le faire basculer en forwarding (protection contre les liens unidirectionnels).</div>
+
+        <div id="dev-stp-vlanprio-block">
+          <div class="builder-row" style="margin-top:10px;">
+            <div class="mini-field grow">
+              <label>VLAN à surclasser individuellement</label>
+              <select id="dev-stp-vlanprio-vlan"></select>
+            </div>
+            <div class="mini-field">
+              <label>Priorité pour ce VLAN</label>
+              <input type="text" id="dev-stp-vlanprio-value" placeholder="ex: 8192">
+            </div>
+            <button class="btn-add" id="dev-stp-vlanprio-add-btn">+ Ajouter</button>
+          </div>
+          <div class="hint">Utile en HSRP/VRRP actif-actif : rends le switch racine pour les VLANs pairs et secondaire pour les VLANs impairs (et inversement sur l'autre switch) afin d'équilibrer le trafic entre les deux liens montants.</div>
+          <div class="port-rows" id="dev-stp-vlanprio-rows"></div>
+        </div>
 
         ${qosBlockHtml()}
 
@@ -825,20 +854,72 @@ function renderDeviceConfigPanel() {
     });
 
     // ---- STP ----
-    const stp = deviceStp[selectedDeviceId] || { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false };
+    const stp = deviceStp[selectedDeviceId] || { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false, vlanPriorities: [] };
+    if (!stp.vlanPriorities) stp.vlanPriorities = [];
     document.getElementById('dev-stp-mode').value = stp.mode;
     document.getElementById('dev-stp-priority').value = stp.priority;
     document.getElementById('dev-stp-bpduguard').checked = stp.bpduGuard;
     document.getElementById('dev-stp-rootguard').checked = stp.rootGuard;
     document.getElementById('dev-stp-loopguard').checked = !!stp.loopGuard;
 
+    const stpVlanPrioSelect = document.getElementById('dev-stp-vlanprio-vlan');
+    stpVlanPrioSelect.innerHTML = topoVlanState.length === 0
+      ? '<option value="">— aucun VLAN —</option>'
+      : topoVlanState.map(v => `<option value="${v.id}">${v.id} — ${v.name}</option>`).join('');
+
+    function updateStpModeVisibility() {
+      const mode = document.getElementById('dev-stp-mode').value;
+      document.getElementById('dev-stp-vlanprio-block').style.display = mode === 'mst' ? 'none' : 'block';
+    }
+    updateStpModeVisibility();
+    document.getElementById('dev-stp-mode').addEventListener('change', updateStpModeVisibility);
+
+    function renderStpVlanPrioRows() {
+      const rows = document.getElementById('dev-stp-vlanprio-rows');
+      const list = (deviceStp[selectedDeviceId] || {}).vlanPriorities || [];
+      if (list.length === 0) {
+        rows.innerHTML = '<span class="empty-hint">Aucun override pour l\'instant — tous les VLANs utilisent la priorité par défaut</span>';
+        return;
+      }
+      rows.innerHTML = list.map((vp, idx) => `
+        <div class="port-row">
+          <span class="port-detail">VLAN ${vp.vlanId} — priorité ${vp.priority}</span>
+          <button class="chip-remove" data-remove-stp-vlanprio="${idx}" title="Retirer">&times;</button>
+        </div>
+      `).join('');
+    }
+    renderStpVlanPrioRows();
+
+    document.getElementById('dev-stp-vlanprio-add-btn').addEventListener('click', () => {
+      const vlanId = stpVlanPrioSelect.value;
+      const priority = document.getElementById('dev-stp-vlanprio-value').value.trim();
+      if (!vlanId || !priority || !/^\d+$/.test(priority)) return;
+      if (!deviceStp[selectedDeviceId]) deviceStp[selectedDeviceId] = { mode: 'rapid-pvst', priority: '', bpduGuard: false, rootGuard: false, loopGuard: false, vlanPriorities: [] };
+      if (!deviceStp[selectedDeviceId].vlanPriorities) deviceStp[selectedDeviceId].vlanPriorities = [];
+      const existingIdx = deviceStp[selectedDeviceId].vlanPriorities.findIndex(vp => vp.vlanId === vlanId);
+      if (existingIdx >= 0) deviceStp[selectedDeviceId].vlanPriorities[existingIdx].priority = priority;
+      else deviceStp[selectedDeviceId].vlanPriorities.push({ vlanId, priority });
+      document.getElementById('dev-stp-vlanprio-value').value = '';
+      renderStpVlanPrioRows();
+      saveState();
+    });
+
+    document.getElementById('dev-stp-vlanprio-rows').addEventListener('click', (e) => {
+      if (e.target.dataset.removeStpVlanprio === undefined) return;
+      deviceStp[selectedDeviceId].vlanPriorities.splice(parseInt(e.target.dataset.removeStpVlanprio, 10), 1);
+      renderStpVlanPrioRows();
+      saveState();
+    });
+
     document.getElementById('dev-stp-save-btn').addEventListener('click', () => {
+      const existing = deviceStp[selectedDeviceId] || { vlanPriorities: [] };
       deviceStp[selectedDeviceId] = {
         mode: document.getElementById('dev-stp-mode').value,
         priority: document.getElementById('dev-stp-priority').value.trim(),
         bpduGuard: document.getElementById('dev-stp-bpduguard').checked,
         rootGuard: document.getElementById('dev-stp-rootguard').checked,
-        loopGuard: document.getElementById('dev-stp-loopguard').checked
+        loopGuard: document.getElementById('dev-stp-loopguard').checked,
+        vlanPriorities: existing.vlanPriorities || []
       };
       renderDeviceConfigPanel();
     });
@@ -1077,6 +1158,19 @@ function renderDeviceConfigPanel() {
           <div class="adv-field">
             <label>DNS (optionnel)</label>
             <input type="text" id="dev-if-dns" placeholder="8.8.8.8">
+          </div>
+          <div class="adv-field" id="dev-if-ip6mode-field">
+            <label>Adressage IPv6 des hôtes (si IPv6 renseigné)</label>
+            <select id="dev-if-ip6mode">
+              <option value="static">Statique seul (pas de RA de config)</option>
+              <option value="slaac">SLAAC (auto-config sans état)</option>
+              <option value="dhcpv6-stateless">DHCPv6 sans état (SLAAC + DNS via DHCPv6)</option>
+              <option value="dhcpv6-stateful">DHCPv6 avec état (adresses distribuées par DHCPv6)</option>
+            </select>
+          </div>
+          <div class="adv-field" id="dev-if-dns6-field">
+            <label>DNS IPv6 (si DHCPv6)</label>
+            <input type="text" id="dev-if-dns6" placeholder="2001:4860:4860::8888">
           </div>
           <div class="adv-field">
             <label>Redondance passerelle</label>
@@ -1351,8 +1445,15 @@ function renderDeviceConfigPanel() {
         </div>
         <div class="hint">File d'attente à priorité stricte (LLQ) pour le trafic marqué DSCP EF (voix), classe par défaut en fair-queue pour le reste — le marquage doit déjà être fiable en amont (frontière de confiance QoS sur le switch d'accès).</div>
 
-        <div class="subsection-label">VPN Site-à-Site (IPsec)</div>
+        <div class="subsection-label">VPN (IPsec)</div>
         <div class="builder-row">
+          <div class="mini-field">
+            <label>Mode</label>
+            <select id="dev-vpn-mode">
+              <option value="site-to-site">Site-à-site (1 ou plusieurs pairs)</option>
+              <option value="dmvpn">DMVPN (hub-and-spoke, mGRE + NHRP)</option>
+            </select>
+          </div>
           <div class="mini-field">
             <label>Activer ?</label>
             <select id="dev-vpn-enabled">
@@ -1368,29 +1469,11 @@ function renderDeviceConfigPanel() {
             </select>
           </div>
           <div class="mini-field grow">
-            <label>IP du pair distant (WAN)</label>
-            <input type="text" id="dev-vpn-peer" placeholder="203.0.113.20">
-          </div>
-          <div class="mini-field grow">
-            <label>Clé pré-partagée</label>
-            <input type="text" id="dev-vpn-psk" placeholder="MaCleSecrete123">
-          </div>
-        </div>
-        <div class="builder-row" style="margin-top:10px;">
-          <div class="mini-field grow">
-            <label>Réseau local à protéger</label>
-            <input type="text" id="dev-vpn-local-net" placeholder="192.168.10.0/24">
-          </div>
-          <div class="mini-field grow">
-            <label>Réseau distant à protéger</label>
-            <input type="text" id="dev-vpn-remote-net" placeholder="192.168.20.0/24">
-          </div>
-          <div class="mini-field grow">
             <label>Interface sortante (WAN)</label>
             <select id="dev-vpn-outside"></select>
           </div>
         </div>
-        <div class="builder-row" style="margin-top:10px;">
+        <div class="builder-row">
           <div class="mini-field">
             <label>Chiffrement</label>
             <select id="dev-vpn-encryption">
@@ -1419,7 +1502,82 @@ function renderDeviceConfigPanel() {
           </div>
           <button class="btn-add" id="dev-vpn-save-btn">Enregistrer</button>
         </div>
-        <div class="hint" id="dev-vpn-hint">Configure aussi le routeur distant avec les réseaux local/distant inversés et la même clé.</div>
+
+        <div id="dev-vpn-site2site-block">
+          <div class="hint">Chaque pair distant est un tunnel indépendant : renseigne son IP publique, le réseau local et le réseau distant qu'il protège, puis "+ Ajouter". Configure le routeur distant en miroir (réseaux local/distant inversés, même clé).</div>
+          <div class="builder-row">
+            <div class="mini-field grow">
+              <label>IP du pair distant (WAN)</label>
+              <input type="text" id="dev-vpn-peer" placeholder="203.0.113.20">
+            </div>
+            <div class="mini-field grow">
+              <label>Clé pré-partagée</label>
+              <input type="text" id="dev-vpn-psk" placeholder="MaCleSecrete123">
+            </div>
+          </div>
+          <div class="builder-row" style="margin-top:10px;">
+            <div class="mini-field grow">
+              <label>Réseau local à protéger</label>
+              <input type="text" id="dev-vpn-local-net" placeholder="192.168.10.0/24">
+            </div>
+            <div class="mini-field grow">
+              <label>Réseau distant à protéger</label>
+              <input type="text" id="dev-vpn-remote-net" placeholder="192.168.20.0/24">
+            </div>
+            <button class="btn-add" id="dev-vpn-add-tunnel-btn">+ Ajouter tunnel</button>
+          </div>
+          <div class="port-rows" id="dev-vpn-tunnel-rows"></div>
+        </div>
+
+        <div id="dev-vpn-dmvpn-block">
+          <div class="hint">DMVPN Phase 1 : le hub porte le mGRE multipoint et répond aux enregistrements NHRP des spokes ; chaque spoke pointe explicitement vers le hub (NHS). Tous les équipements DMVPN d'un même cloud doivent partager le même ID de tunnel GRE, le même NHRP network-id et la même clé d'authentification NHRP.</div>
+          <div class="builder-row">
+            <div class="mini-field">
+              <label>Rôle</label>
+              <select id="dev-vpn-dmvpn-role">
+                <option value="hub">Hub</option>
+                <option value="spoke">Spoke</option>
+              </select>
+            </div>
+            <div class="mini-field">
+              <label>N° Tunnel GRE</label>
+              <input type="text" id="dev-vpn-dmvpn-tunnelid" placeholder="0">
+            </div>
+            <div class="mini-field grow">
+              <label>IP de tunnel (ce routeur)</label>
+              <input type="text" id="dev-vpn-dmvpn-tunnelip" placeholder="10.0.0.1">
+            </div>
+            <div class="mini-field">
+              <label>Masque (CIDR)</label>
+              <input type="text" id="dev-vpn-dmvpn-tunnelcidr" placeholder="24">
+            </div>
+          </div>
+          <div class="builder-row" style="margin-top:10px;">
+            <div class="mini-field">
+              <label>NHRP network-id</label>
+              <input type="text" id="dev-vpn-dmvpn-nhrpid" placeholder="1">
+            </div>
+            <div class="mini-field grow">
+              <label>Clé d'authentification NHRP</label>
+              <input type="text" id="dev-vpn-dmvpn-nhrpauth" placeholder="DMVPN-KEY">
+            </div>
+            <div class="mini-field grow">
+              <label>Clé pré-partagée IPsec (commune au cloud)</label>
+              <input type="text" id="dev-vpn-dmvpn-psk" placeholder="MaCleSecreteDMVPN">
+            </div>
+          </div>
+          <div class="builder-row" id="dev-vpn-dmvpn-spoke-fields" style="margin-top:10px;">
+            <div class="mini-field grow">
+              <label>IP de tunnel du hub (NHS)</label>
+              <input type="text" id="dev-vpn-dmvpn-hubtunnelip" placeholder="10.0.0.1">
+            </div>
+            <div class="mini-field grow">
+              <label>IP publique du hub (WAN)</label>
+              <input type="text" id="dev-vpn-dmvpn-hubpublicip" placeholder="203.0.113.1">
+            </div>
+          </div>
+        </div>
+        <div class="hint" id="dev-vpn-hint"></div>
       </div>
     `;
 
@@ -1477,7 +1635,7 @@ function renderDeviceConfigPanel() {
       box.innerHTML = rows.map((iface, idx) => {
         const label = iface.sub ? `${iface.name}.${iface.vlanId}` : iface.name;
         let detail = iface.sub ? `sous-interface VLAN ${iface.vlanId} — ${iface.ip}` : iface.ip;
-        if (iface.ip6) detail += ` + ${iface.ip6}`;
+        if (iface.ip6) detail += ` + ${iface.ip6}${iface.ip6Mode && iface.ip6Mode !== 'static' ? ` (${iface.ip6Mode})` : ''}`;
         if (iface.ospfArea) detail += ` — <span class="port-detail-extra">zone OSPF ${iface.ospfArea}</span>`;
         if (iface.name.startsWith('Se')) {
           const extras = [`encap. ${iface.encapsulation || 'hdlc'}`];
@@ -1535,7 +1693,7 @@ function renderDeviceConfigPanel() {
 
       const name = type + num;
       const ospfAreaRaw = document.getElementById('dev-if-ospf-area').value.trim();
-      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, ip6: ip6Raw || null, ospfArea: ospfAreaRaw || null, description: '' };
+      const entry = { name, sub, vlanId: sub ? vlanId : null, ip: ipRaw, ip6: ip6Raw || null, ip6Mode: ip6Raw ? document.getElementById('dev-if-ip6mode').value : 'static', dns6: document.getElementById('dev-if-dns6').value.trim(), ospfArea: ospfAreaRaw || null, description: '' };
 
       if (type === 'Se') {
         entry.encapsulation = document.getElementById('dev-if-encap').value;
@@ -1562,6 +1720,8 @@ function renderDeviceConfigPanel() {
       document.getElementById('dev-if-name').value = '';
       document.getElementById('dev-if-ip').value = '';
       document.getElementById('dev-if-ip6').value = '';
+      document.getElementById('dev-if-ip6mode').value = 'static';
+      document.getElementById('dev-if-dns6').value = '';
       document.getElementById('dev-if-ospf-area').value = '';
       document.getElementById('dev-if-clockrate').value = '';
       document.getElementById('dev-if-bandwidth').value = '';
@@ -1818,40 +1978,108 @@ function renderDeviceConfigPanel() {
       saveState();
     });
 
-    // ---- VPN Site-à-Site (IPsec) ----
+    // ---- VPN (IPsec) ----
     const vpnOutsideSelect = document.getElementById('dev-vpn-outside');
     vpnOutsideSelect.innerHTML = ifaceFullNames.length === 0
       ? '<option value="">— aucune interface avec IP —</option>'
       : ifaceFullNames.map(name => `<option value="${name}">${name}</option>`).join('');
 
-    const vpn = deviceVpn[selectedDeviceId] || { enabled: false, ike: '2', peerIp: '', presharedKey: '', localNetwork: '', remoteNetwork: '', outsideIface: '', encryption: 'aes 256', hash: 'sha256', dhGroup: '14' };
+    const vpn = deviceVpn[selectedDeviceId] || defaultVpnState();
+    if (!vpn.dmvpn) vpn.dmvpn = defaultVpnState().dmvpn;
+    if (!vpn.tunnels) vpn.tunnels = [];
+    document.getElementById('dev-vpn-mode').value = vpn.mode || 'site-to-site';
     document.getElementById('dev-vpn-enabled').value = vpn.enabled ? 'yes' : 'no';
     document.getElementById('dev-vpn-ike').value = vpn.ike || '2';
-    document.getElementById('dev-vpn-peer').value = vpn.peerIp;
-    document.getElementById('dev-vpn-psk').value = vpn.presharedKey;
-    document.getElementById('dev-vpn-local-net').value = vpn.localNetwork;
-    document.getElementById('dev-vpn-remote-net').value = vpn.remoteNetwork;
     document.getElementById('dev-vpn-encryption').value = vpn.encryption;
     document.getElementById('dev-vpn-hash').value = vpn.hash;
     document.getElementById('dev-vpn-dhgroup').value = vpn.dhGroup;
     if (vpn.outsideIface) vpnOutsideSelect.value = vpn.outsideIface;
+    document.getElementById('dev-vpn-dmvpn-role').value = vpn.dmvpn.role || 'hub';
+    document.getElementById('dev-vpn-dmvpn-tunnelid').value = vpn.dmvpn.tunnelId || '0';
+    document.getElementById('dev-vpn-dmvpn-tunnelip').value = vpn.dmvpn.tunnelIp || '';
+    document.getElementById('dev-vpn-dmvpn-tunnelcidr').value = vpn.dmvpn.tunnelCidr || '24';
+    document.getElementById('dev-vpn-dmvpn-nhrpid').value = vpn.dmvpn.nhrpNetworkId || '1';
+    document.getElementById('dev-vpn-dmvpn-nhrpauth').value = vpn.dmvpn.nhrpAuth || '';
+    document.getElementById('dev-vpn-dmvpn-psk').value = vpn.dmvpn.presharedKey || '';
+    document.getElementById('dev-vpn-dmvpn-hubtunnelip').value = vpn.dmvpn.hubTunnelIp || '';
+    document.getElementById('dev-vpn-dmvpn-hubpublicip').value = vpn.dmvpn.hubPublicIp || '';
+
+    function updateVpnModeVisibility() {
+      const mode = document.getElementById('dev-vpn-mode').value;
+      document.getElementById('dev-vpn-site2site-block').style.display = mode === 'site-to-site' ? 'block' : 'none';
+      document.getElementById('dev-vpn-dmvpn-block').style.display = mode === 'dmvpn' ? 'block' : 'none';
+      const isSpoke = document.getElementById('dev-vpn-dmvpn-role').value === 'spoke';
+      document.getElementById('dev-vpn-dmvpn-spoke-fields').style.display = isSpoke ? 'flex' : 'none';
+      document.getElementById('dev-vpn-hint').textContent = mode === 'dmvpn'
+        ? `DMVPN actif — rôle ${isSpoke ? 'spoke' : 'hub'}, tunnel ${vpn.dmvpn.tunnelId || '0'}, réseau NHRP ${vpn.dmvpn.nhrpNetworkId || '1'}`
+        : `${(vpn.tunnels || []).length} tunnel(s) site-à-site configuré(s)`;
+    }
+    updateVpnModeVisibility();
+    document.getElementById('dev-vpn-mode').addEventListener('change', updateVpnModeVisibility);
+    document.getElementById('dev-vpn-dmvpn-role').addEventListener('change', updateVpnModeVisibility);
+
+    function renderVpnTunnelRows() {
+      const rows = document.getElementById('dev-vpn-tunnel-rows');
+      const list = (deviceVpn[selectedDeviceId] || {}).tunnels || [];
+      if (list.length === 0) {
+        rows.innerHTML = '<span class="empty-hint">Aucun tunnel site-à-site pour l\'instant</span>';
+        return;
+      }
+      rows.innerHTML = list.map((t, idx) => `
+        <div class="port-row">
+          <span class="port-detail">${t.peerIp} — ${t.localNetwork} ↔ ${t.remoteNetwork}</span>
+          <button class="chip-remove" data-remove-vpn-tunnel="${idx}" title="Retirer">&times;</button>
+        </div>
+      `).join('');
+    }
+    renderVpnTunnelRows();
+
+    document.getElementById('dev-vpn-add-tunnel-btn').addEventListener('click', () => {
+      const peerIp = document.getElementById('dev-vpn-peer').value.trim();
+      const presharedKey = document.getElementById('dev-vpn-psk').value.trim();
+      const localNetwork = document.getElementById('dev-vpn-local-net').value.trim();
+      const remoteNetwork = document.getElementById('dev-vpn-remote-net').value.trim();
+      if (!peerIp || ipToInt(peerIp) === null || !localNetwork || !remoteNetwork) return;
+      if (!deviceVpn[selectedDeviceId]) deviceVpn[selectedDeviceId] = defaultVpnState();
+      if (!deviceVpn[selectedDeviceId].tunnels) deviceVpn[selectedDeviceId].tunnels = [];
+      deviceVpn[selectedDeviceId].tunnels.push({ peerIp, presharedKey, localNetwork, remoteNetwork });
+      document.getElementById('dev-vpn-peer').value = '';
+      document.getElementById('dev-vpn-psk').value = '';
+      document.getElementById('dev-vpn-local-net').value = '';
+      document.getElementById('dev-vpn-remote-net').value = '';
+      renderVpnTunnelRows();
+      saveState();
+    });
+
+    document.getElementById('dev-vpn-tunnel-rows').addEventListener('click', (e) => {
+      if (e.target.dataset.removeVpnTunnel === undefined) return;
+      deviceVpn[selectedDeviceId].tunnels.splice(parseInt(e.target.dataset.removeVpnTunnel, 10), 1);
+      renderVpnTunnelRows();
+      saveState();
+    });
 
     document.getElementById('dev-vpn-save-btn').addEventListener('click', () => {
-      const peerIp = document.getElementById('dev-vpn-peer').value.trim();
-      const localNet = document.getElementById('dev-vpn-local-net').value.trim();
-      const remoteNet = document.getElementById('dev-vpn-remote-net').value.trim();
-
+      const existing = deviceVpn[selectedDeviceId] || defaultVpnState();
       deviceVpn[selectedDeviceId] = {
         enabled: document.getElementById('dev-vpn-enabled').value === 'yes',
+        mode: document.getElementById('dev-vpn-mode').value,
         ike: document.getElementById('dev-vpn-ike').value,
-        peerIp,
-        presharedKey: document.getElementById('dev-vpn-psk').value.trim(),
-        localNetwork: localNet,
-        remoteNetwork: remoteNet,
         outsideIface: vpnOutsideSelect.value,
         encryption: document.getElementById('dev-vpn-encryption').value,
         hash: document.getElementById('dev-vpn-hash').value,
-        dhGroup: document.getElementById('dev-vpn-dhgroup').value
+        dhGroup: document.getElementById('dev-vpn-dhgroup').value,
+        tunnels: existing.tunnels || [],
+        dmvpn: {
+          role: document.getElementById('dev-vpn-dmvpn-role').value,
+          tunnelId: document.getElementById('dev-vpn-dmvpn-tunnelid').value.trim() || '0',
+          tunnelIp: document.getElementById('dev-vpn-dmvpn-tunnelip').value.trim(),
+          tunnelCidr: document.getElementById('dev-vpn-dmvpn-tunnelcidr').value.trim() || '24',
+          nhrpNetworkId: document.getElementById('dev-vpn-dmvpn-nhrpid').value.trim() || '1',
+          nhrpAuth: document.getElementById('dev-vpn-dmvpn-nhrpauth').value.trim(),
+          presharedKey: document.getElementById('dev-vpn-dmvpn-psk').value.trim(),
+          hubTunnelIp: document.getElementById('dev-vpn-dmvpn-hubtunnelip').value.trim(),
+          hubPublicIp: document.getElementById('dev-vpn-dmvpn-hubpublicip').value.trim()
+        }
       };
       renderDeviceConfigPanel();
       saveState();

@@ -65,6 +65,27 @@ Puis ouvrir `http://localhost:8000`.
 
 ## Historique des livraisons
 
+### 2026-08-05 — DHCPv6 / SLAAC : adressage IPv6 des hôtes
+- Le volet IPv6 se limitait à des adresses statiques (interfaces, OSPFv3) ; chaque interface routeur avec une adresse IPv6 a maintenant un mode d'adressage des hôtes : Statique, SLAAC, DHCPv6 sans état (SLAAC + DNS via DHCPv6) ou DHCPv6 avec état (adresses distribuées par DHCPv6)
+- Génère les bons flags de Router Advertisement (`ipv6 nd other-config-flag` pour le sans-état, `ipv6 nd managed-config-flag` pour l'état complet) et le pool DHCPv6 correspondant, avec calcul automatique du préfixe délégué à partir de l'adresse IPv6 de l'interface pour le mode avec état
+- SLAAC pur ne génère aucune ligne supplémentaire (comportement par défaut dès qu'une adresse IPv6 est configurée) — seul le champ informatif change dans l'affichage de l'interface
+- Testé de bout en bout avec 3 interfaces (une par mode) — sortie de config vérifiée sans erreur JS
+- Cache du service worker passé en v42
+
+### 2026-08-05 — STP : priorité par VLAN individuel
+- La priorité STP n'était qu'un seul réglage appliqué à tous les VLANs à la fois ; il est maintenant possible de surclasser des VLANs un par un (liste ajout/suppression, même pattern que les voisins BGP ou les tunnels VPN), le champ "priorité par défaut" continuant à s'appliquer à tous les VLANs sans override
+- Cas d'usage typique : actif-actif HSRP/VRRP où un switch est root STP pour les VLANs pairs et l'autre pour les VLANs impairs, afin de répartir le trafic sur les deux liens montants au lieu de tout faire passer par un seul
+- Non applicable en mode MST (la priorité s'y règle par instance, pas par VLAN) : le bloc d'override se masque automatiquement dans ce mode
+- Testé de bout en bout (3 VLANs, 2 avec override, 1 sur la priorité par défaut) — sortie de config vérifiée sans erreur JS
+- Cache du service worker passé en v41
+
+### 2026-08-04 — VPN/IPsec avancé : multi-pair site-à-site + DMVPN (hub-and-spoke)
+- **VPN site-à-site multi-pair** : le module ne gérait qu'un seul tunnel par routeur ; il gère maintenant une liste de tunnels (ajout/suppression comme les voisins BGP), chacun avec son propre pair, sa propre clé, ses propres réseaux protégés — un seul ACL + une séquence de crypto map par tunnel, une seule interface WAN qui porte toutes les séquences
+- **DMVPN (Phase 1, hub-and-spoke)** : nouveau mode alternatif au site-à-site classique — mGRE multipoint, NHRP (network-id, authentification, mappage statique du hub côté spoke, NHS), IPsec en mode transport via `tunnel protection`, et désactivation automatique du split-horizon EIGRP sur le hub quand EIGRP est actif (sans ça, les routes apprises d'un spoke ne seraient jamais réannoncées aux autres)
+- IKEv1 et IKEv2 tous les deux supportés dans les deux modes (clé ISAKMP par pair ou keyring/profile IKEv2 par pair en site-à-site ; clé "any" ou profil `match identity remote any` côté hub en DMVPN)
+- Testé de bout en bout avec 3 routeurs (site-à-site 1 routeur vers 2 pairs, hub DMVPN + EIGRP, spoke DMVPN) — sortie de config vérifiée sans erreur JS
+- Cache du service worker passé en v40
+
 ### 2026-08-04 — EIGRP : mode nommé, authentification MD5/SHA-256, redistribution connectée
 - **EIGRP named mode (IOS 15+)** : bascule via une case Classique/Nommé ; génère un bloc `router eigrp <nom> / address-family ipv4 unicast autonomous-system <AS>` complet (network, passive-interface, redistribution) au lieu du classique `router eigrp <AS>`
 - **Authentification EIGRP** : MD5 (key chain globale + `ip authentication mode/key-chain` sur chaque interface participante en mode classique, `af-interface default` en mode nommé) ou HMAC-SHA-256 (IOS 15.1+, mot de passe direct sans key chain)
